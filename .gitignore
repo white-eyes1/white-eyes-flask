@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# 환경 설정·비밀값
+.env
+
+# 모델 가중치 (YOLO_WEIGHTS 환경변수로 경로를 받는다)
+*.pt
+*.pth
+*.onnx
+weights/
+
+# 영상·녹화 산출물
+*.mp4
+*.json.gz
+
+# Windows 다운로드 메타데이터
+*:Zone.Identifier
+
+# IDE
+.idea/

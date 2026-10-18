@@ -11,7 +11,7 @@ labels: type:feature
 - 화면: SCR-
 
 ## 완료 기준
-(project-docs의 검수 기준을 그대로 옮김)
+(white-eyes-docs의 검수 기준을 그대로 옮김)
 - [ ] 
 
 ## 범위 밖

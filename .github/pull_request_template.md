@@ -9,3 +9,4 @@ Closes #
 - [ ] 비밀값(키·비밀번호)·더미 데이터·영상 파일을 커밋하지 않음
 - [ ] 명세와 다르게 만든 부분이 있으면 white-eyes-docs PR을 올리고 링크함: 
 - [ ] 다른 팀원의 Claude도 알아야 할 규칙이 생겼으면 CLAUDE.md 또는 .claude/rules를 고쳤음
+- [ ] 겪은 문제 중 기록할 것이 있으면 docs/troubleshooting에 남겼음(없으면 '해당 없음')

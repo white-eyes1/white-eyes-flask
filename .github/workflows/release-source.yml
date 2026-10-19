@@ -1,0 +1,9 @@
+name: release-source
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  only-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ github.head_ref }}" = "dev"

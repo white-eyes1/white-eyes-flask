@@ -1,8 +1,8 @@
-# spring/.github/CODEOWNERS
-/CLAUDE.md          @<white-eyes1>/leads
-/.claude/           @<white-eyes1>/leads
-/.github/           @<white-eyes1>/leads
-/build.gradle*      @<white-eyes1>/leads
-/settings.gradle*   @<white-eyes1>/leads
-**/application*.yml @<white-eyes1>/leads
-**/db/migration/    @<white-eyes1>/leads
+# white-eyes-flask/.github/CODEOWNERS
+/CLAUDE.md          @white-eyes1/leads
+/.claude/           @white-eyes1/leads
+/.github/           @white-eyes1/leads
+/build.gradle*      @white-eyes1/leads
+/settings.gradle*   @white-eyes1/leads
+**/application*.yml @white-eyes1/leads
+**/db/migration/    @white-eyes1/leads

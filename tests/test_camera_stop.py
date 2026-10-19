@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,25 @@ def test_stop_without_token_is_401(client, app):
     client.post(start_url(), json=START_BODY, headers=HEADERS)
     assert client.post(stop_url()).status_code == 401
     assert app.extensions["camera_service"].job_count() == 1
+
+
+def test_start_during_slow_stop_never_overlaps_threads(client, app, monkeypatch):
+    def slow_to_end(self) -> None:
+        self._stop_flag.wait()
+        time.sleep(0.3)
+
+    monkeypatch.setattr(camera_job.CameraJob, "_run", slow_to_end)
+    client.post(start_url(), json=START_BODY, headers=HEADERS)
+
+    stopper = threading.Thread(
+        target=lambda: app.test_client().post(stop_url(), headers=HEADERS)
+    )
+    stopper.start()
+    time.sleep(0.05)
+    client.post(start_url(), json=START_BODY, headers=HEADERS)
+
+    assert len(cam_threads()) == 1
+    stopper.join()
 
 
 def test_slow_job_still_returns_200_and_logs_warning(client, app, monkeypatch, caplog):

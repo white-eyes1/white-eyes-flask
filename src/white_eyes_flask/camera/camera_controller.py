@@ -40,6 +40,13 @@ def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     return {"cameraId": camera_id, "status": status}
 
 
+@camera_bp.post("/<int:camera_id>/stop")
+def stop_camera(camera_id: int) -> Response:
+    service: CameraService = current_app.extensions["camera_service"]
+    service.stop(camera_id)
+    return Response(status=200)
+
+
 def _invalid_request(problems: list[tuple[str, str]]) -> tuple[Response, int]:
     field_errors = [{"field": field, "message": text} for field, text in problems]
     return error_response(

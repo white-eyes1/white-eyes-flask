@@ -2,7 +2,7 @@ import logging
 import threading
 from pathlib import Path
 
-from white_eyes_flask.camera.camera_job import CameraJob, CameraStatus
+from white_eyes_flask.camera.camera_job import STOP_WAIT_SEC, CameraJob, CameraStatus
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,25 @@ class CameraService:
 
         logger.info("캠 가동 cameraId=%s status=%s", camera_id, status)
         return status
+
+    def stop(self, camera_id: int) -> None:
+        """캠 작업을 멈춘다. 작업이 없어도 오류 없이 끝난다(멱등)."""
+        with self._lock:
+            job = self._jobs.pop(camera_id, None)
+        if job is None:
+            return
+
+        # 종료 대기는 잠금 밖에서 한다. 느린 캠 하나가 다른 캠의 시작·정지를 막지 않게.
+        # 녹화 파일 마무리(FNC-S-008 4~6번)와 준비 취소(FNC-S-009)는 해당 이슈에서 채운다.
+        # 전송 대기 중인 결과는 건드리지 않는다(전송 작업이 보냄).
+        if job.stop(STOP_WAIT_SEC):
+            logger.info("캠 정지 cameraId=%s", camera_id)
+        else:
+            logger.warning(
+                "캠 정지 지연 cameraId=%s, %s초 안에 끝나지 않음",
+                camera_id,
+                STOP_WAIT_SEC,
+            )
 
     def job_count(self) -> int:
         with self._lock:

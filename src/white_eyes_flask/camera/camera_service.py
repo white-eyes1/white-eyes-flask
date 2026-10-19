@@ -26,14 +26,15 @@ class CameraService:
 
     def start(self, camera_id: int, source_type: str, source_uri: str) -> CameraStatus:
         """캠 작업을 시작하고 상태를 돌려준다. 이미 돌고 있으면 그대로 돌려준다."""
-        if source_type == "LIVE":
-            # LIVE 분기(FNC-S-007)는 2단계
-            raise SourceTypeNotSupportedError(source_type)
-
         with self._lock:
+            # 명세 처리 순서 1번: 이미 돌고 있으면 요청 내용과 상관없이 현재 상태
             running = self._jobs.get(camera_id)
             if running is not None and running.is_alive():
                 return running.status
+
+            if source_type == "LIVE":
+                # LIVE 분기(FNC-S-007)는 2단계
+                raise SourceTypeNotSupportedError(source_type)
 
             self._check_dummy_source(source_uri)
             status = (
@@ -66,7 +67,14 @@ class CameraService:
             or ".." in source_uri
         ):
             raise SourceNotFoundError(source_uri)
-        if not (self._media_root / source_uri).is_file():
+        try:
+            path = (self._media_root / source_uri).resolve()
+            inside = path.is_relative_to(self._media_root.resolve())
+            exists = inside and path.is_file()
+        except (OSError, ValueError):
+            raise SourceNotFoundError(source_uri) from None
+        if not exists:
+            # 심볼릭 링크로 공유 폴더 밖을 가리키는 경우도 여기서 막힌다
             raise SourceNotFoundError(source_uri)
 
     def _has_cache(self, source_uri: str) -> bool:

@@ -13,14 +13,20 @@ SOURCE_TYPES = {"LIVE", "DUMMY"}
 
 
 @camera_bp.post("/<int:camera_id>/start")
-def start_camera(camera_id: int) -> Response | tuple[Response, int]:
+def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        return _invalid_request()
+        return _invalid_request([("body", "JSON 객체여야 합니다.")])
+
     source_type = body.get("sourceType")
     source_uri = body.get("sourceUri")
-    if source_type not in SOURCE_TYPES or not isinstance(source_uri, str):
-        return _invalid_request()
+    problems: list[tuple[str, str]] = []
+    if not isinstance(source_type, str) or source_type not in SOURCE_TYPES:
+        problems.append(("sourceType", "LIVE 또는 DUMMY여야 합니다."))
+    if not isinstance(source_uri, str):
+        problems.append(("sourceUri", "문자열이어야 합니다."))
+    if problems:
+        return _invalid_request(problems)
 
     service: CameraService = current_app.extensions["camera_service"]
     try:
@@ -34,5 +40,8 @@ def start_camera(camera_id: int) -> Response | tuple[Response, int]:
     return {"cameraId": camera_id, "status": status}
 
 
-def _invalid_request() -> tuple[Response, int]:
-    return error_response("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", 400)
+def _invalid_request(problems: list[tuple[str, str]]) -> tuple[Response, int]:
+    field_errors = [{"field": field, "message": text} for field, text in problems]
+    return error_response(
+        "INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", 400, field_errors
+    )

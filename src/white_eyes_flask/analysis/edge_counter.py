@@ -26,7 +26,9 @@ def band_of(cx: float, cy: float, margin: float) -> str | None:
         depths["E"] = cx - (1 - margin)
     if not depths:
         return None
-    return max(depths, key=lambda d: (depths[d], -_TIE_ORDER[d]))
+    # 0.98 - 0.95와 0.05 - 0.02처럼 수학으로는 같은 깊이가 부동소수점으로는 다를 수
+    # 있어서, 반올림한 값으로 비교해야 동률 규칙이 맞게 적용된다.
+    return max(depths, key=lambda d: (round(depths[d], 9), -_TIE_ORDER[d]))
 
 
 @dataclass
@@ -50,7 +52,7 @@ class EdgeCounter:
         self._margin = margin
         self._lost_frames = lost_frames
         self._people: dict[int, _Person] = {}
-        self._frame = 0
+        self._frame = -1  # 첫 프레임 번호는 0부터 받을 수 있다
         self._counts = self._zero()
         self._lock = threading.Lock()
 

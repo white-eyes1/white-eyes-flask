@@ -61,6 +61,9 @@ def expect(**changes):
         ((0.02, 0.02), "N"),  # 깊이가 같으면 남북이 먼저
         ((0.98, 0.98), "S"),
         ((0.02, 0.98), "S"),
+        ((0.98, 0.02), "N"),  # 부동소수점 오차가 있어도 동률은 남북 우선
+        ((0.97, 0.03), "N"),
+        ((0.03, 0.97), "S"),
         ((-0.2, 0.5), "W"),  # 범위 밖은 0~1로 자름
         ((0.5, 1.3), "S"),
     ],
@@ -194,6 +197,13 @@ def test_missing_slots_count_as_elapsed_time():
     # 8~13번 슬롯 누락 후 다시 나타남: 이미 끊긴 사람이라 새 사람이고, 이전 사람은 out 확정
     counter.update({1: (0.5, 0.5)}, frame_no=14)
     assert totals(counter) == expect(out_N=1)
+
+
+def test_frame_numbers_can_start_from_zero():
+    counter = make()
+    counter.update({1: (0.5, 0.02)}, frame_no=0)
+    counter.update({1: (0.5, 0.3)}, frame_no=1)
+    assert totals(counter) == expect(in_N=1)
 
 
 def test_frame_numbers_must_increase():

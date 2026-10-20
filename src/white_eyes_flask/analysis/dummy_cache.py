@@ -1,9 +1,11 @@
 import contextlib
 import gzip
 import json
+import math
 import os
 import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
@@ -13,6 +15,19 @@ CACHE_VERSION = 1
 LOCK_POLL_SEC = 0.2
 BOXES_DIR = "dummy/boxes"
 _COORD_DIGITS = 4
+_DIRECTIONS = ("N", "E", "S", "W")
+
+
+class CacheInvalidError(Exception):
+    """캐시 파일이 없거나 깨져서 쓸 수 없음."""
+
+
+@dataclass(frozen=True)
+class CachedResult:
+    """읽어서 검증한 더미 분석 캐시. 재생(FNC-S-010)이 쓴다."""
+
+    seconds: list[dict[str, Any]]
+    duration_sec: float  # 영상 길이 L초
 
 
 class DummyCache:
@@ -49,6 +64,21 @@ class DummyCache:
             self.result_path(source_uri).is_file()
             and self.boxes_path(source_uri).is_file()
         )
+
+    def load(self, source_uri: str) -> CachedResult:
+        """캐시 JSON을 읽고 검증한다. 없거나 깨졌으면 CacheInvalidError."""
+        path = self.result_path(source_uri)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise CacheInvalidError(f"캐시를 읽을 수 없음: {path.name}") from error
+        return _validate(data, path.name)
+
+    def invalidate(self, source_uri: str) -> None:
+        """깨진 캐시를 지워서 다음 시작 때 다시 준비하게 한다."""
+        for path in (self.result_path(source_uri), self.boxes_path(source_uri)):
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
 
     @contextlib.contextmanager
     def lock(self, source_uri: str, stop: threading.Event) -> Iterator[bool]:
@@ -137,11 +167,19 @@ class DummyResultWriter:
         self._stream.write(frame if self._first_frame else "," + frame)
         self._first_frame = False
 
-    def commit(self, seconds: list[dict[str, Any]]) -> None:
+    def commit(
+        self, seconds: list[dict[str, Any]], duration_sec: float | None = None
+    ) -> None:
         self._stream.write("]}")
         self._stream.close()
         self._stream = None
-        result = {"version": CACHE_VERSION, "fps": self._fps, "seconds": seconds}
+        result: dict[str, Any] = {
+            "version": CACHE_VERSION,
+            "fps": self._fps,
+            "seconds": seconds,
+        }
+        if duration_sec is not None:
+            result["durationSec"] = duration_sec
         self._result_tmp.write_text(
             json.dumps(result, ensure_ascii=False, separators=(",", ":")),
             encoding="utf-8",
@@ -168,3 +206,37 @@ class DummyResultWriter:
         for path in (self._boxes_tmp, self._result_tmp):
             with contextlib.suppress(OSError):
                 path.unlink()
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate(data: Any, name: str) -> CachedResult:
+    """재생이 믿고 쓸 수 있는 모양인지 확인한다(0부터 이어진 초, 숫자 필드, 길이)."""
+    if not isinstance(data, dict) or not isinstance(data.get("seconds"), list):
+        raise CacheInvalidError(f"캐시 형식이 맞지 않음: {name}")
+    seconds = data["seconds"]
+    if not seconds:
+        raise CacheInvalidError(f"캐시에 초별 결과가 없음: {name}")
+    for index, entry in enumerate(seconds):
+        if not isinstance(entry, dict) or entry.get("sec") != index:
+            raise CacheInvalidError(f"초 번호가 0부터 이어지지 않음: {name}")
+        count = entry.get("personCount")
+        if not _is_number(count) or count < 0:
+            raise CacheInvalidError(f"personCount가 숫자가 아님: {name}")
+        for key in ("in", "out"):
+            counts = entry.get(key)
+            if not isinstance(counts, dict) or not all(
+                _is_number(counts.get(d)) for d in _DIRECTIONS
+            ):
+                raise CacheInvalidError(f"{key} 형식이 맞지 않음: {name}")
+        dwell = entry.get("dwellSec")
+        if not isinstance(dwell, list) or not all(_is_number(v) for v in dwell):
+            raise CacheInvalidError(f"dwellSec 형식이 맞지 않음: {name}")
+    duration = data.get("durationSec", float(len(seconds)))
+    if not _is_number(duration) or not math.isfinite(duration):
+        raise CacheInvalidError(f"영상 길이가 숫자가 아님: {name}")
+    if duration <= 0 or duration > len(seconds):
+        raise CacheInvalidError(f"영상 길이가 초별 결과와 맞지 않음: {name}")
+    return CachedResult(seconds=seconds, duration_sec=float(duration))

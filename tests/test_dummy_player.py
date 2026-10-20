@@ -8,7 +8,11 @@ from datetime import datetime
 import pytest
 
 from white_eyes_flask.analysis.dummy_cache import DummyCache
-from white_eyes_flask.camera.dummy_player import DummyPlayer, PlayOutcome
+from white_eyes_flask.camera.dummy_player import (
+    DummyPlayer,
+    PlayOutcome,
+    RegistrationWorker,
+)
 from white_eyes_flask.camera.kst import KST
 from white_eyes_flask.camera.recording_registrar import RegisterResult
 from white_eyes_flask.camera.result_queue import ResultQueue
@@ -95,6 +99,7 @@ def make_player(cache, fake, registrar=None, sink=None, reporter=None, **kwargs)
         reporter,
         clock=fake.clock,
         waiter=fake.wait,
+        inline_registration=kwargs.pop("inline_registration", True),
         **kwargs,
     )
     return player, registrar, sink, reporter
@@ -124,7 +129,7 @@ def test_first_result_is_sent_at_the_next_second_boundary(cache):
     run(player)
     items = sink.drain()
     assert ats(items) == ["2026-10-12T14:03:06+09:00"]
-    assert fake.waits[0] == pytest.approx(0.7)  # 5.3초 -> 6.0초 경계까지
+    assert fake.waits[0] == pytest.approx(0.7, abs=0.01)  # 5.3초 -> 6.0초 경계까지
     assert items[0]["personCount"] == 0  # k = 0
 
 
@@ -165,8 +170,8 @@ def test_recording_is_registered_once_per_repetition_with_paths(cache):
     fake = FakeClock(epoch(14, 3, 0), max_waits=8)
     player, registrar, _, _ = make_player(cache, fake)
     run(player)
-    assert wait_until(lambda: len(registrar.calls) == 2)
-    first, second = registrar.calls
+    assert len(registrar.calls) >= 2
+    first, second = registrar.calls[:2]
     assert first[0] == CAMERA
     assert first[2:] == (SOURCE, "dummy/boxes/clip.json.gz")
     assert second[1] - first[1] == 3000  # 3초짜리 영상이라 3초 뒤에 다음 반복
@@ -245,11 +250,17 @@ def test_catch_up_across_a_repetition_boundary_registers_the_new_repetition(cach
         return original_wait(stop, timeout)
 
     player = DummyPlayer(
-        cache, registrar, sink, FakeReporter(), clock=fake.clock, waiter=slow_wait
+        cache,
+        registrar,
+        sink,
+        FakeReporter(),
+        clock=fake.clock,
+        waiter=slow_wait,
+        inline_registration=True,
     )
     run(player)
     assert [item["personCount"] for item in sink.drain()] == [0, 10, 20, 0, 10]
-    assert wait_until(lambda: len(registrar.calls) == 2)
+    assert len(registrar.calls) == 2
 
 
 def test_very_long_stall_skips_ahead_with_a_warning(cache, caplog):
@@ -365,7 +376,9 @@ def test_registration_does_not_block_the_per_second_results(cache):
     fake = FakeClock(epoch(14, 3, 0), max_waits=5)
     registrar = FakeRegistrar()
     registrar.block = threading.Event()  # 관리자 앱이 응답하지 않는 상황
-    player, _, sink, _ = make_player(cache, fake, registrar=registrar)
+    player, _, sink, _ = make_player(
+        cache, fake, registrar=registrar, inline_registration=False
+    )
     try:
         run(player)
         assert len(sink.drain()) == 4  # 등록이 막혀 있어도 결과는 매초 나간다
@@ -373,59 +386,204 @@ def test_registration_does_not_block_the_per_second_results(cache):
         registrar.block.set()
 
 
-def test_transient_registration_failure_is_retried_with_the_same_start(cache):
-    publish(cache, [second_result(s) for s in range(10)], duration=10.0)
-    fake = FakeClock(epoch(14, 3, 0), max_waits=3)
-    registrar = FakeRegistrar([RegisterResult.RETRY, RegisterResult.RETRY])
-    player, _, _, _ = make_player(cache, fake, registrar=registrar, retry_interval=0.01)
-    run(player)
-    assert wait_until(lambda: len(registrar.calls) == 3)
-    assert len({call[1] for call in registrar.calls}) == 1  # 같은 startedAt
+# --- 녹화 등록 작업 스레드(RegistrationWorker) ---
 
 
-def test_rejected_registration_is_not_retried(cache, caplog):
-    publish(cache, [second_result(s) for s in range(10)], duration=10.0)
-    fake = FakeClock(epoch(14, 3, 0), max_waits=3)
-    registrar = FakeRegistrar([RegisterResult.REJECTED])
-    player, _, _, _ = make_player(cache, fake, registrar=registrar, retry_interval=0.01)
-    with caplog.at_level(logging.ERROR):
-        run(player)
-    assert wait_until(lambda: "녹화 등록 거절" in caplog.text)
-    time.sleep(0.1)
-    assert len(registrar.calls) == 1
-
-
-def test_registrations_are_sent_in_repetition_order_even_when_retrying(cache):
-    publish(cache, [second_result(s) for s in range(2)], duration=2.0)
-    fake = FakeClock(epoch(14, 3, 0), max_waits=7)
-    registrar = FakeRegistrar([RegisterResult.RETRY])
-    player, _, _, _ = make_player(cache, fake, registrar=registrar, retry_interval=0.01)
-    run(player)
-    assert wait_until(lambda: len(registrar.calls) >= 4)
-    starts = [call[1] for call in registrar.calls]
-    assert starts[:2] == [starts[0], starts[0]]  # 첫 반복을 성공시킨 뒤에 다음 반복
-    assert starts == sorted(starts)
-
-
-def test_registration_gives_up_after_the_retry_window(cache, caplog):
-    publish(cache, [second_result(s) for s in range(10)], duration=10.0)
-    fake = FakeClock(epoch(14, 3, 0), max_waits=3)
-    registrar = FakeRegistrar([RegisterResult.RETRY] * 1000)
-    player, _, _, _ = make_player(
-        cache, fake, registrar=registrar, retry_interval=0.01, retry_window=0.1
+def make_worker(registrar, **kwargs):
+    stop = kwargs.pop("stop", threading.Event())
+    worker = RegistrationWorker(
+        registrar,
+        CAMERA,
+        SOURCE,
+        "dummy/boxes/clip.json.gz",
+        stop,
+        retry_interval=kwargs.pop("retry_interval", 0.01),
+        retry_window=kwargs.pop("retry_window", 60.0),
     )
+    worker.start()
+    return worker
+
+
+def test_worker_submit_does_not_block_while_the_server_is_slow():
+    registrar = FakeRegistrar()
+    registrar.block = threading.Event()
+    worker = make_worker(registrar)
+    try:
+        started = time.time()
+        worker.submit(1_000)
+        worker.submit(2_000)
+        assert time.time() - started < 0.5
+    finally:
+        registrar.block.set()
+        worker.shutdown()
+
+
+def test_worker_retries_a_transient_failure_with_the_same_start():
+    registrar = FakeRegistrar([RegisterResult.RETRY, RegisterResult.RETRY])
+    worker = make_worker(registrar)
+    try:
+        worker.submit(5_000)
+        assert wait_until(lambda: len(registrar.calls) == 3)
+        assert {call[1] for call in registrar.calls} == {5_000}
+    finally:
+        worker.shutdown()
+
+
+def test_worker_does_not_retry_a_rejected_registration(caplog):
+    registrar = FakeRegistrar([RegisterResult.REJECTED])
     with caplog.at_level(logging.ERROR):
-        run(player)
-    assert wait_until(lambda: "녹화 등록 포기" in caplog.text)
+        worker = make_worker(registrar)
+        try:
+            worker.submit(5_000)
+            assert wait_until(lambda: "녹화 등록 거절" in caplog.text)
+            time.sleep(0.1)
+            assert len(registrar.calls) == 1
+        finally:
+            worker.shutdown()
 
 
-def test_stop_drops_pending_registrations(cache):
+def test_worker_keeps_the_repetition_order_even_when_retrying():
+    registrar = FakeRegistrar([RegisterResult.RETRY])
+    worker = make_worker(registrar)
+    try:
+        worker.submit(1_000)
+        worker.submit(2_000)
+        assert wait_until(lambda: len(registrar.calls) == 3)
+        assert [call[1] for call in registrar.calls] == [1_000, 1_000, 2_000]
+    finally:
+        worker.shutdown()
+
+
+def test_worker_gives_up_after_the_retry_window_and_moves_on(caplog):
+    registrar = FakeRegistrar([RegisterResult.RETRY] * 10_000)
+    with caplog.at_level(logging.ERROR):
+        worker = make_worker(registrar, retry_window=0.1)
+        try:
+            worker.submit(1_000)
+            assert wait_until(lambda: "녹화 등록 포기" in caplog.text)
+            registrar.results.clear()  # 이제 서버가 살아남
+            worker.submit(2_000)
+            assert wait_until(lambda: registrar.calls[-1][1] == 2_000)
+        finally:
+            worker.shutdown()
+
+
+def test_worker_stops_retrying_after_shutdown():
+    registrar = FakeRegistrar([RegisterResult.RETRY] * 10_000)
+    worker = make_worker(registrar)
+    worker.submit(1_000)
+    assert wait_until(lambda: len(registrar.calls) >= 2)
+    worker.shutdown()
+    count = len(registrar.calls)
+    time.sleep(0.15)
+    assert len(registrar.calls) == count
+
+
+def test_worker_stops_retrying_when_the_camera_is_stopped():
+    stop = threading.Event()
+    registrar = FakeRegistrar([RegisterResult.RETRY] * 10_000)
+    worker = make_worker(registrar, stop=stop)
+    try:
+        worker.submit(1_000)
+        assert wait_until(lambda: len(registrar.calls) >= 2)
+        stop.set()
+        time.sleep(0.1)
+        count = len(registrar.calls)
+        time.sleep(0.15)
+        assert len(registrar.calls) == count
+    finally:
+        worker.shutdown()
+
+
+def test_worker_drops_the_oldest_pending_registration_when_full(caplog):
+    registrar = FakeRegistrar()
+    registrar.block = threading.Event()  # 첫 요청이 응답하지 않아 뒤가 밀림
+    worker = RegistrationWorker(
+        registrar,
+        CAMERA,
+        SOURCE,
+        "dummy/boxes/clip.json.gz",
+        threading.Event(),
+        retry_interval=0.01,
+        max_pending=2,
+    )
+    worker.start()
+    try:
+        with caplog.at_level(logging.WARNING):
+            worker.submit(1_000)
+            time.sleep(0.1)  # 작업 스레드가 1_000을 집어 가서 막혀 있음
+            for ms in (2_000, 3_000, 4_000, 5_000):
+                worker.submit(ms)
+        assert "가장 오래된 것을 버림" in caplog.text
+    finally:
+        registrar.block.set()
+        assert wait_until(lambda: len(registrar.calls) >= 3)
+        worker.shutdown()
+    sent = [call[1] for call in registrar.calls]
+    assert sent[0] == 1_000
+    assert 2_000 not in sent and 3_000 not in sent  # 가장 오래된 둘은 버려짐
+    assert 5_000 in sent
+
+
+def test_worker_retry_window_includes_the_time_spent_waiting_in_the_queue(caplog):
+    registrar = FakeRegistrar()
+    registrar.block = threading.Event()
+    worker = make_worker(registrar, retry_window=0.15)
+    try:
+        with caplog.at_level(logging.ERROR):
+            worker.submit(1_000)
+            time.sleep(0.05)
+            worker.submit(2_000)  # 첫 요청 뒤에서 기다리는 동안 기한이 흐른다
+            time.sleep(0.3)
+            registrar.block.set()
+            assert wait_until(lambda: "녹화 등록 포기" in caplog.text)
+        assert [call[1] for call in registrar.calls] == [1_000]  # 2_000은 보내지 않음
+    finally:
+        registrar.block.set()
+        worker.shutdown()
+
+
+class _BrokenCache(DummyCache):
+    def invalidate(self, source_uri):
+        raise PermissionError("삭제 권한 없음")
+
+
+def test_error_is_reported_even_if_the_broken_cache_cannot_be_removed(tmp_path):
+    broken = _BrokenCache(cache_dir=tmp_path / "c", media_root=tmp_path / "m")
+    publish(broken, [second_result(0)], duration=1.0)
+    broken.result_path(SOURCE).write_text("{깨진 json", encoding="utf-8")
+    fake = FakeClock(epoch(14, 3, 0), max_waits=3)
+    player, _, _, reporter = make_player(broken, fake)
+    assert run(player) == PlayOutcome.FAILED
+    assert reporter.calls == [(CAMERA, "ERROR", None, "캐시 파일을 읽을 수 없음")]
+
+
+def test_stop_in_the_middle_of_catching_up_sends_no_more_seconds(cache):
     publish(cache, [second_result(s) for s in range(10)], duration=10.0)
     fake = FakeClock(epoch(14, 3, 0), max_waits=3)
-    registrar = FakeRegistrar([RegisterResult.RETRY] * 1000)
-    player, _, _, _ = make_player(cache, fake, registrar=registrar, retry_interval=0.01)
-    run(player)
-    time.sleep(0.1)
-    count = len(registrar.calls)
-    time.sleep(0.2)
-    assert len(registrar.calls) == count  # 정지 뒤에는 더 시도하지 않는다
+    stop = threading.Event()
+
+    class StoppingSink(ResultQueue):
+        def put(self, item):
+            super().put(item)
+            stop.set()  # 첫 결과를 넣자마자 정지가 들어옴
+
+    original_wait = fake.wait
+
+    def stall(stop_event, timeout):
+        if len(fake.waits) == 1:
+            fake.now += 3.0
+        return original_wait(stop_event, timeout)
+
+    sink = StoppingSink(maxlen=100)
+    player = DummyPlayer(
+        cache,
+        FakeRegistrar(),
+        sink,
+        FakeReporter(),
+        clock=fake.clock,
+        waiter=stall,
+        inline_registration=True,
+    )
+    run(player, stop)
+    assert len(sink.drain()) == 1

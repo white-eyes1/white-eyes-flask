@@ -110,7 +110,7 @@ class DummyPreparer:
     def _analyze(self, camera_id: int, source_uri: str, stop: threading.Event) -> None:
         detector = self._detector_provider()
         with self._cache.writer(source_uri, self._fps) as writer:
-            seconds = analyze_video(
+            result = analyze_video(
                 self._media_root / source_uri,
                 detector,
                 fps=self._fps,
@@ -124,7 +124,7 @@ class DummyPreparer:
             )
             if stop.is_set():
                 raise AnalysisStopped()
-            writer.commit(seconds)
+            writer.commit(result.seconds, result.duration_sec)
 
     def _fail(self, camera_id: int, message: str) -> PrepareOutcome:
         self._report(camera_id, "ERROR", error_message=message)

@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 
 from white_eyes_flask.camera.camera_job import STOP_WAIT_SEC, CameraJob, CameraStatus
+from white_eyes_flask.camera.player import NullPlayer, Player
 from white_eyes_flask.camera.preparer import NullPreparer, Preparer
 
 logger = logging.getLogger(__name__)
@@ -20,9 +21,15 @@ class SourceTypeNotSupportedError(Exception):
 
 
 class CameraService:
-    def __init__(self, media_root: str, preparer: Preparer | None = None) -> None:
+    def __init__(
+        self,
+        media_root: str,
+        preparer: Preparer | None = None,
+        player: Player | None = None,
+    ) -> None:
         self._media_root = Path(media_root)
         self._preparer = preparer or NullPreparer()
+        self._player = player or NullPlayer()
         # _lock은 아래 두 딕셔너리를 읽고 쓰는 짧은 순간에만 쓴다.
         # 같은 캠의 시작·정지는 캠별 잠금(_camera_lock)으로 줄 세운다.
         self._lock = threading.Lock()
@@ -47,7 +54,7 @@ class CameraService:
                 if self._has_cache(source_uri)
                 else CameraStatus.PREPARING
             )
-            job = CameraJob(camera_id, source_uri, status, self._preparer)
+            job = CameraJob(camera_id, source_uri, status, self._preparer, self._player)
             job.start()
             with self._lock:
                 self._jobs[camera_id] = job

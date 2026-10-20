@@ -25,7 +25,10 @@ def idle(counter, frames):
 
 
 def totals(counter):
-    return counter.pop_counts()
+    """유입·유출 수만 비교한다(체류 시간은 test_dwell_time.py에서 본다)."""
+    counts = counter.pop_counts()
+    del counts["dwell_sec"]
+    return counts
 
 
 def empty():
@@ -225,7 +228,7 @@ def test_pop_counts_resets_and_returns_a_copy():
     move(counter, [(0.5, 0.02), (0.5, 0.2)])
     first = counter.pop_counts()
     first["in"]["N"] = 99
-    assert counter.pop_counts() == empty()
+    assert totals(counter) == empty()
 
 
 def test_counts_are_not_lost_when_popped_from_another_thread():

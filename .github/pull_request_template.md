@@ -11,4 +11,5 @@ Closes #
 - [ ] 명세와 다르게 만든 부분이 있으면 white-eyes-docs PR을 올리고 링크함: 
 - [ ] 다른 팀원의 Claude도 알아야 할 규칙이 생겼으면 CLAUDE.md 또는 .claude/rules를 고쳤음
 - [ ] 겪은 문제 중 기록할 것이 있으면 docs/troubleshooting에 남겼음(없으면 '해당 없음')
+- [ ] 미룬 처리가 있으면 받을 이슈 본문의 '넘겨받은 일'에 옮기고 이슈 번호를 적었음(없으면 '해당 없음'): 
 - [ ] 구현한 기능의 ID(FNC-…)를 진입점 모듈·클래스와 테스트 주석에 적었음 (code-conventions 2-4)

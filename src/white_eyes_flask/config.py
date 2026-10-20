@@ -8,6 +8,9 @@ class Config:
     yolo_weights: str | None
     host: str
     port: int
+    detect_conf: float = 0.3
+    detect_imgsz: int = 960
+    analyze_fps: int = 5
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -16,4 +19,7 @@ class Config:
             yolo_weights=os.environ.get("YOLO_WEIGHTS") or None,
             host=os.environ.get("HOST", "0.0.0.0"),
             port=int(os.environ.get("PORT", "5000")),
+            detect_conf=float(os.environ.get("DETECT_CONF", "0.3")),
+            detect_imgsz=int(os.environ.get("DETECT_IMGSZ", "960")),
+            analyze_fps=int(os.environ.get("ANALYZE_FPS", "5")),
         )

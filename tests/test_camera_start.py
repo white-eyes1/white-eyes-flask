@@ -117,10 +117,10 @@ def test_failed_start_does_not_create_job(client, app):
         {"sourceType": "DUMMY", "sourceUri": 123},
     ],
 )
-def test_invalid_request_body_returns_400(client, body):
+def test_invalid_input_body_returns_400(client, body):
     res = client.post(START_URL, json=body, headers=HEADERS)
     assert res.status_code == 400
-    assert res.get_json()["code"] == "INVALID_REQUEST"
+    assert res.get_json()["code"] == "INVALID_INPUT"
 
 
 @pytest.mark.parametrize("source_type", [[], {}, 1, None])
@@ -128,10 +128,10 @@ def test_non_string_source_type_returns_400(client, source_type):
     body = {"sourceType": source_type, "sourceUri": "dummy/videos/a.mp4"}
     res = client.post(START_URL, json=body, headers=HEADERS)
     assert res.status_code == 400
-    assert res.get_json()["code"] == "INVALID_REQUEST"
+    assert res.get_json()["code"] == "INVALID_INPUT"
 
 
-def test_invalid_request_has_field_errors(client):
+def test_invalid_input_has_field_errors(client):
     body = {"sourceType": "FILE", "sourceUri": 123}
     res = client.post(START_URL, json=body, headers=HEADERS)
     fields = {item["field"] for item in res.get_json()["fieldErrors"]}

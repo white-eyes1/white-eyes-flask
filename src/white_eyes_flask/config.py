@@ -15,6 +15,8 @@ class Config:
     edge_margin_ratio: float = 0.05
     cache_dir: str = "/var/lib/analyzer/cache"
     admin_internal_base_url: str = "http://localhost:8082"
+    detector: str = "visdrone"
+    detect_dedupe_overlap: float = 0.25
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -31,5 +33,9 @@ class Config:
             cache_dir=os.environ.get("CACHE_DIR", "/var/lib/analyzer/cache"),
             admin_internal_base_url=os.environ.get(
                 "ADMIN_INTERNAL_BASE_URL", "http://localhost:8082"
+            ),
+            detector=os.environ.get("DETECTOR", "visdrone"),
+            detect_dedupe_overlap=float(
+                os.environ.get("DETECT_DEDUPE_OVERLAP", "0.25")
             ),
         )

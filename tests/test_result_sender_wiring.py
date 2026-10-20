@@ -1,0 +1,88 @@
+import pytest
+
+from white_eyes_flask import app as app_module
+from white_eyes_flask.app import create_app
+from white_eyes_flask.config import Config
+
+
+class FakePreparer:
+    def prepare(self, *args, **kwargs):  # pragma: no cover - 쓰이지 않는다
+        raise AssertionError
+
+
+class FakePlayer:
+    def play(self, *args, **kwargs):  # pragma: no cover - 쓰이지 않는다
+        raise AssertionError
+
+
+class FakeSender:
+    def __init__(self):
+        self.started = 0
+        self.stopped = 0
+
+    def start(self):
+        self.started += 1
+
+    def stop(self, timeout=5.0):
+        self.stopped += 1
+
+
+def config(**kwargs):
+    return Config(
+        internal_token="t0ken",
+        yolo_weights=None,
+        host="127.0.0.1",
+        port=5000,
+        **kwargs,
+    )
+
+
+def test_config_reads_the_retry_buffer_seconds_from_env(monkeypatch):
+    monkeypatch.setenv("RESULT_RETRY_BUFFER_SEC", "120")
+    assert Config.from_env().result_retry_buffer_sec == 120
+    monkeypatch.delenv("RESULT_RETRY_BUFFER_SEC")
+    assert Config.from_env().result_retry_buffer_sec == 300
+
+
+def test_an_injected_sender_is_started_and_kept_on_the_app():
+    sender = FakeSender()
+    app = create_app(
+        config(), preparer=FakePreparer(), player=FakePlayer(), result_sender=sender
+    )
+    assert sender.started == 1
+    assert app.extensions["result_sender"] is sender
+
+
+def test_no_sender_is_started_when_a_player_is_injected():
+    # 가짜 재생기는 전송 큐를 쓰지 않으므로 보낼 것이 없다(시험에서 쓸데없는 스레드가 돌지 않게)
+    app = create_app(config(), preparer=FakePreparer(), player=FakePlayer())
+    assert "result_sender" not in app.extensions
+
+
+def test_the_real_run_builds_a_sender_from_the_config(monkeypatch):
+    built = {}
+
+    class RecordingSender(FakeSender):
+        def __init__(self, queue, client, retry_buffer_sec):
+            super().__init__()
+            built.update(queue=queue, client=client, retry=retry_buffer_sec)
+
+    class RecordingClient:
+        def __init__(self, base_url, token):
+            built.update(base_url=base_url, token=token)
+
+    monkeypatch.setattr(app_module, "ResultSender", RecordingSender)
+    monkeypatch.setattr(app_module, "ResultClient", RecordingClient)
+    app = create_app(
+        config(
+            admin_internal_base_url="http://admin:8082", result_retry_buffer_sec=240
+        ),
+        preparer=FakePreparer(),
+    )
+    sender = app.extensions["result_sender"]
+    assert sender.started == 1
+    assert built["base_url"] == "http://admin:8082"
+    assert built["token"] == "t0ken"
+    assert built["retry"] == 240
+    # 재생기가 넣는 큐를 보내는 쪽이 비운다(같은 큐)
+    assert built["queue"] is app.extensions["result_queue"]

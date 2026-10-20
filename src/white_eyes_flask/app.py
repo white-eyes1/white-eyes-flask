@@ -24,7 +24,11 @@ def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
         media_root=config.media_root,
         cache=cache,
         detector_provider=LazyDetectorProvider(
-            config.yolo_weights, config.detect_imgsz, config.detect_conf
+            config.yolo_weights,
+            config.detect_imgsz,
+            config.detect_conf,
+            config.detector,
+            config.detect_dedupe_overlap,
         ),
         reporter=StatusReporter(config.admin_internal_base_url, config.internal_token),
         fps=config.analyze_fps,

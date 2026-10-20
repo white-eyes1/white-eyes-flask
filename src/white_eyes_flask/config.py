@@ -16,6 +16,8 @@ class Config:
     cache_dir: str = "/var/lib/analyzer/cache"
     admin_internal_base_url: str = "http://localhost:8082"
     result_retry_buffer_sec: int = 300
+    detector: str = "visdrone"
+    detect_dedupe_overlap: float = 0.25
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -35,5 +37,9 @@ class Config:
             ),
             result_retry_buffer_sec=int(
                 os.environ.get("RESULT_RETRY_BUFFER_SEC", "300")
+            ),
+            detector=os.environ.get("DETECTOR", "visdrone"),
+            detect_dedupe_overlap=float(
+                os.environ.get("DETECT_DEDUPE_OVERLAP", "0.25")
             ),
         )

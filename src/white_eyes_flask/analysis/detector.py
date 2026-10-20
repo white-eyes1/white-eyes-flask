@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 VENDOR_DIR = Path(__file__).resolve().parents[3] / "vendor" / "yolo_crowd"
 IOU_THRES = 0.45
+MIN_PAD_STRIDE = 32
 
 
 class Detector(Protocol):
@@ -50,7 +51,10 @@ class YoloCrowdDetector:
         iou_thres: float = IOU_THRES,
     ) -> None:
         self._model = model
-        self._stride = stride
+        # 입력 가로·세로는 32의 배수여야 한다. YOLO-CROWD는 model.stride.max()가 16이지만
+        # 내부에 32배로 줄이는 층이 있어서, 16의 배수만 맞추면 입력 크기에 따라 층을 합칠 때
+        # 텐서 크기가 어긋나 오류가 난다(예: 1080x1920 영상을 입력 640으로 돌릴 때).
+        self._stride = max(stride, MIN_PAD_STRIDE)
         self._imgsz = imgsz
         self._conf_thres = conf_thres
         self._iou_thres = iou_thres

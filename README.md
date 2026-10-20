@@ -38,7 +38,17 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 
 ## 가중치
 
-모델 가중치(`*.pt`)는 커밋하지 않는다. `YOLO_WEIGHTS` 환경변수로 파일 경로를 준다.
+모델 가중치(`*.pt`)는 커밋하지 않는다(`weights/`는 `.gitignore`). `YOLO_WEIGHTS` 환경변수로 파일 경로를 준다.
+
+가중치 `yolo-crowd.pt`는 비공개 저장소 `white-eyes1/white-eyes-assets`의 Release `yolo-crowd-v1`에 있다(출처: https://github.com/zaki1003/YOLO-CROWD README의 Postweight). `gh`로 로그인한 뒤 받고, **받은 뒤 해시를 꼭 확인한다**(가중치는 pickle 형식이라 `torch.load(weights_only=False)`로 읽으므로 믿을 수 있는 파일만 쓴다).
+
+```bash
+gh release download yolo-crowd-v1 --repo white-eyes1/white-eyes-assets --pattern "yolo-crowd.pt" --dir ./weights
+sha256sum weights/yolo-crowd.pt      # Windows PowerShell: (Get-FileHash weights\yolo-crowd.pt).Hash
+# SHA-256: 22aea94cad4eb181e94ea600b0013cf7307b1a4dd8788cc8454dc5ca5f573c39
+```
+
+`.env`에는 `YOLO_WEIGHTS=./weights/yolo-crowd.pt`처럼 적는다.
 
 ## vendor/ 출처
 

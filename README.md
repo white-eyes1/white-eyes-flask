@@ -8,7 +8,7 @@ White Eyes 분석 서버. 명세: `white-eyes-docs`의 `features/analyzer.md`, `
 
 ```bash
 uv sync
-cp .env.example .env   # INTERNAL_TOKEN, YOLO_WEIGHTS 채우기
+cp .env.example .env   # INTERNAL_API_TOKEN, YOLO_WEIGHTS 채우기
 uv run white-eyes-flask
 curl -H "X-Internal-Token: <토큰>" localhost:5000/analyzer/v1/health
 ```

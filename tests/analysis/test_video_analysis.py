@@ -132,8 +132,9 @@ def test_entering_from_the_top_band_is_counted_in_north(tmp_path, cache):
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
 
     def script(i):
-        # 박스가 화면 안에 있게 작게 만들고(화면 밖으로 잘리면 중심이 달라짐) 위에서 아래로
-        return [person(80, 3 + 3 * min(i, 8), size=8)]
+        # 박스가 화면 안에 있게 작게 만들고(화면 밖으로 잘리면 중심이 달라짐) 위에서 아래로.
+        # 번호는 두 번째 프레임부터 받으므로 슬롯 0·1(y=2, 4)이 위쪽 띠 안이어야 한다.
+        return [person(80, 2 + 2 * min(i, 14), size=8)]
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert sum(s["in"]["N"] for s in seconds) == 1
@@ -152,7 +153,8 @@ def test_leaving_through_the_bottom_band_counts_out_and_dwell(tmp_path, cache):
     seconds = run(video, ScriptedDetector(script), cache)
     assert sum(s["out"]["S"] for s in seconds) == 1
     dwell = [d for s in seconds for d in s["dwellSec"]]
-    assert dwell == [2.4]  # 슬롯 0에서 처음, 슬롯 12에서 마지막: 12 / 5
+    # 번호는 두 번째로 보인 슬롯 1부터 받는다: 슬롯 1에서 처음, 슬롯 12에서 마지막 = 11 / 5
+    assert dwell == [2.2]
 
 
 def test_leaving_right_before_the_end_is_confirmed_after_the_last_frame(
@@ -166,7 +168,7 @@ def test_leaving_right_before_the_end_is_confirmed_after_the_last_frame(
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert seconds[-1]["out"]["S"] == 1
-    assert seconds[-1]["dwellSec"] == [2.8]
+    assert seconds[-1]["dwellSec"] == [2.6]  # 슬롯 1부터 슬롯 14까지 = 13 / 5
 
 
 def test_box_file_has_one_frame_per_slot_with_normalized_boxes(tmp_path, cache):
@@ -176,11 +178,11 @@ def test_box_file_has_one_frame_per_slot_with_normalized_boxes(tmp_path, cache):
     assert data["version"] == 1 and data["fps"] == 5
     assert len(data["frames"]) == 5
     track_id, x, y, w, h = data["frames"][0]["b"][0]
-    assert track_id == 1
+    assert track_id is None  # 처음 보인 프레임에는 아직 번호가 없다
     assert (x, y, w, h) == pytest.approx(
         (70 / 160, 50 / 120, 20 / 160, 20 / 120), abs=1e-4
     )
-    assert all(frame["b"][0][0] == 1 for frame in data["frames"])  # 번호 유지
+    assert all(frame["b"][0][0] == 1 for frame in data["frames"][1:])  # 번호 유지
 
 
 def test_detection_error_skips_that_slot_but_continues(tmp_path, cache):

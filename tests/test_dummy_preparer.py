@@ -241,8 +241,8 @@ def test_stop_after_files_are_published_does_not_report_running(
     stop = threading.Event()
     real_commit = dummy_cache.DummyResultWriter.commit
 
-    def commit_then_stop(self, seconds):
-        real_commit(self, seconds)
+    def commit_then_stop(self, seconds, duration_sec=None):
+        real_commit(self, seconds, duration_sec)
         stop.set()  # 파일을 올린 직후에 정지가 들어옴
 
     monkeypatch.setattr(dummy_cache.DummyResultWriter, "commit", commit_then_stop)

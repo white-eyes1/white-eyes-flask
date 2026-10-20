@@ -8,7 +8,9 @@ TOKEN = "test-token"
 
 @pytest.fixture
 def client():
-    app = create_app(Config(internal_token=TOKEN, yolo_weights=None, host="127.0.0.1", port=5000))
+    app = create_app(
+        Config(internal_token=TOKEN, yolo_weights=None, host="127.0.0.1", port=5000)
+    )
     return app.test_client()
 
 
@@ -28,6 +30,8 @@ def test_health_with_wrong_token_is_401(client):
 
 
 def test_empty_configured_token_rejects_everything():
-    app = create_app(Config(internal_token="", yolo_weights=None, host="127.0.0.1", port=5000))
+    app = create_app(
+        Config(internal_token="", yolo_weights=None, host="127.0.0.1", port=5000)
+    )
     res = app.test_client().get("/analyzer/v1/health", headers={"X-Internal-Token": ""})
     assert res.status_code == 401

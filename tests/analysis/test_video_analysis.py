@@ -64,7 +64,7 @@ def cache(tmp_path: Path) -> DummyCache:
 def run(video, detector, cache, stop=None, progress=None):
     stop = stop or threading.Event()
     with cache.writer(SOURCE, fps=FPS) as writer:
-        seconds = analyze_video(
+        result = analyze_video(
             video,
             detector,
             fps=FPS,
@@ -74,8 +74,21 @@ def run(video, detector, cache, stop=None, progress=None):
             stop=stop,
             on_progress=progress or (lambda percent: None),
         )
-        writer.commit(seconds)
-    return seconds
+        writer.commit(result.seconds, result.duration_sec)
+    run.last_duration = result.duration_sec
+    return result.seconds
+
+
+def test_duration_is_the_number_of_frames_read_divided_by_video_fps(tmp_path, cache):
+    video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
+    run(video, ScriptedDetector(empty_frames), cache)
+    assert run.last_duration == pytest.approx(3.0)
+
+
+def test_duration_of_a_video_whose_length_is_not_whole_seconds(tmp_path, cache):
+    video = make_video(tmp_path / "clip.mp4", frames=75, fps=30)
+    run(video, ScriptedDetector(empty_frames), cache)
+    assert run.last_duration == pytest.approx(2.5)
 
 
 def read_boxes(cache):

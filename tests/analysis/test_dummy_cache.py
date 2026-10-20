@@ -1,5 +1,6 @@
 import gzip
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -165,3 +166,46 @@ def test_waiting_for_lock_gives_up_when_stop_is_set(cache):
         thread.join(timeout=3)
     assert results == [False]
     assert not thread.is_alive()
+
+
+def test_failure_while_publishing_the_result_leaves_no_half_published_cache(
+    cache, monkeypatch
+):
+    real_replace = os.replace
+
+    def flaky_replace(src, dst):
+        if str(dst).endswith(".json"):
+            raise OSError("디스크 가득 참")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(
+        "white_eyes_flask.analysis.dummy_cache.os.replace", flaky_replace
+    )
+    with pytest.raises(OSError):
+        publish(cache)
+    assert cache.has(SOURCE) is False
+    assert not cache.boxes_path(SOURCE).exists()
+
+
+def test_old_result_json_is_removed_before_new_boxes_are_published(cache):
+    publish(cache, [{"sec": 0}])
+    seen = {}
+    with cache.writer(SOURCE, fps=5) as writer:
+        writer.add_frame(0.0, [box(1)])
+        real_replace = os.replace
+
+        def spying_replace(src, dst):
+            if str(dst).endswith(".json.gz"):
+                seen["old_result_still_there"] = cache.result_path(SOURCE).exists()
+            return real_replace(src, dst)
+
+        import white_eyes_flask.analysis.dummy_cache as module
+
+        original = module.os.replace
+        module.os.replace = spying_replace
+        try:
+            writer.commit([{"sec": 1}])
+        finally:
+            module.os.replace = original
+    assert seen == {"old_result_still_there": False}
+    assert cache.has(SOURCE) is True

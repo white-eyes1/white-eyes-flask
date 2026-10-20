@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 
 from white_eyes_flask.camera.camera_job import STOP_WAIT_SEC, CameraJob, CameraStatus
+from white_eyes_flask.camera.preparer import NullPreparer, Preparer
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +20,9 @@ class SourceTypeNotSupportedError(Exception):
 
 
 class CameraService:
-    def __init__(self, media_root: str) -> None:
+    def __init__(self, media_root: str, preparer: Preparer | None = None) -> None:
         self._media_root = Path(media_root)
+        self._preparer = preparer or NullPreparer()
         # _lock은 아래 두 딕셔너리를 읽고 쓰는 짧은 순간에만 쓴다.
         # 같은 캠의 시작·정지는 캠별 잠금(_camera_lock)으로 줄 세운다.
         self._lock = threading.Lock()
@@ -45,7 +47,7 @@ class CameraService:
                 if self._has_cache(source_uri)
                 else CameraStatus.PREPARING
             )
-            job = CameraJob(camera_id, source_uri, status)
+            job = CameraJob(camera_id, source_uri, status, self._preparer)
             job.start()
             with self._lock:
                 self._jobs[camera_id] = job
@@ -114,5 +116,5 @@ class CameraService:
             raise SourceNotFoundError(source_uri)
 
     def _has_cache(self, source_uri: str) -> bool:
-        # 더미 분석 캐시 확인은 FNC-S-009에서 구현한다. 그 전까지는 항상 없음.
-        return False
+        # 캐시·좌표 파일이 모두 있으면 준비 없이 바로 RUNNING(FNC-S-009)
+        return self._preparer.has_cache(source_uri)

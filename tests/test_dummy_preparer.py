@@ -230,3 +230,32 @@ def test_failing_status_report_does_not_stop_the_analysis(tmp_path, media):
     outcome = preparer.prepare(7, SOURCE, threading.Event())
     assert outcome == PrepareOutcome.DONE
     assert cache.has(SOURCE) is True
+
+
+def test_stop_after_files_are_published_does_not_report_running(
+    tmp_path, media, monkeypatch
+):
+    from white_eyes_flask.analysis import dummy_cache
+
+    preparer, cache, _, reporter = make_preparer(tmp_path, media)
+    stop = threading.Event()
+    real_commit = dummy_cache.DummyResultWriter.commit
+
+    def commit_then_stop(self, seconds):
+        real_commit(self, seconds)
+        stop.set()  # 파일을 올린 직후에 정지가 들어옴
+
+    monkeypatch.setattr(dummy_cache.DummyResultWriter, "commit", commit_then_stop)
+    assert preparer.prepare(7, SOURCE, stop) == PrepareOutcome.STOPPED
+    assert cache.has(SOURCE) is True  # 만든 캐시는 그대로 쓸 수 있다
+    assert "RUNNING" not in reporter.statuses()
+
+
+def test_stop_before_start_returns_stopped_even_with_cache(tmp_path, media):
+    preparer, _, _, reporter = make_preparer(tmp_path, media)
+    preparer.prepare(7, SOURCE, threading.Event())
+    reporter.calls.clear()
+    stop = threading.Event()
+    stop.set()
+    assert preparer.prepare(8, SOURCE, stop) == PrepareOutcome.STOPPED
+    assert reporter.calls == []

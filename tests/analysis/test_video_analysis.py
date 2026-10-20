@@ -119,7 +119,8 @@ def test_entering_from_the_top_band_is_counted_in_north(tmp_path, cache):
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
 
     def script(i):
-        return [person(80, 2 + 4 * i)] if i < 8 else [person(80, 34)]
+        # 박스가 화면 안에 있게 작게 만들고(화면 밖으로 잘리면 중심이 달라짐) 위에서 아래로
+        return [person(80, 3 + 3 * min(i, 8), size=8)]
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert sum(s["in"]["N"] for s in seconds) == 1
@@ -130,16 +131,15 @@ def test_leaving_through_the_bottom_band_counts_out_and_dwell(tmp_path, cache):
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
 
     def script(i):
-        if i <= 11:
-            return [
-                person(80, 60 + 5 * i)
-            ]  # 안쪽에서 아래로 이동, 슬롯 11에서 y=115(띠는 y > 114)
+        if i <= 12:
+            # 안쪽에서 아래로 이동해 슬롯 12에서 y=116(아래 띠는 y > 114)
+            return [person(80, 80 + 3 * i, size=8)]
         return []
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert sum(s["out"]["S"] for s in seconds) == 1
     dwell = [d for s in seconds for d in s["dwellSec"]]
-    assert dwell == [2.2]  # 슬롯 0에서 처음, 슬롯 11에서 마지막: 11 / 5
+    assert dwell == [2.4]  # 슬롯 0에서 처음, 슬롯 12에서 마지막: 12 / 5
 
 
 def test_leaving_right_before_the_end_is_confirmed_after_the_last_frame(
@@ -148,9 +148,8 @@ def test_leaving_right_before_the_end_is_confirmed_after_the_last_frame(
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)  # 슬롯 0~14
 
     def script(i):
-        return [
-            person(80, 60 + 4 * i)
-        ]  # 마지막 슬롯(y=116)에 아래 띠로 나감 -> 영상이 끝나 확정은 그 뒤
+        # 마지막 슬롯(y=116)에 아래 띠로 나감 -> 영상이 끝나 확정은 그 뒤
+        return [person(80, 60 + 4 * i, size=8)]
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert seconds[-1]["out"]["S"] == 1
@@ -222,3 +221,36 @@ def test_unreadable_video_raises_read_error(tmp_path, cache):
 def test_missing_video_raises_read_error(tmp_path, cache):
     with pytest.raises(VideoReadError):
         run(tmp_path / "none.mp4", ScriptedDetector(empty_frames), cache)
+
+
+class _FailingCapture:
+    """90프레임이라고 알리지만 10번째 프레임부터 읽지 못하는 영상."""
+
+    def __init__(self, path):
+        self.reads = 0
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        return {cv2.CAP_PROP_FPS: 30.0, cv2.CAP_PROP_FRAME_COUNT: 90.0}.get(prop, 0.0)
+
+    def read(self):
+        self.reads += 1
+        if self.reads > 10:
+            return False, None
+        return True, np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+
+    def release(self):
+        pass
+
+
+def test_video_that_stops_being_readable_halfway_is_an_error(
+    tmp_path, cache, monkeypatch
+):
+    monkeypatch.setattr(
+        "white_eyes_flask.analysis.video_analysis.cv2.VideoCapture", _FailingCapture
+    )
+    with pytest.raises(VideoReadError):
+        run(tmp_path / "any.mp4", ScriptedDetector(empty_frames), cache)
+    assert cache.has(SOURCE) is False

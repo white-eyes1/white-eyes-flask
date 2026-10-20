@@ -30,6 +30,12 @@ uv export --no-hashes --no-emit-project -o requirements-dev.txt
 
 Python 버전은 `.python-version`(3.12.15)에 고정.
 
+`torch`는 CPU 전용으로 `2.6.0`에 고정했다(Windows 최신 torch 오류: `docs/troubleshooting/0002-torch-dll-init-windows.md`). Linux에서는 `uv`가 PyTorch CPU 저장소(`https://download.pytorch.org/whl/cpu`)에서 받는다. `requirements.txt`로 `pip`을 쓸 때는 같은 주소를 같이 준다.
+
+```bash
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
 ## 가중치
 
 모델 가중치(`*.pt`)는 커밋하지 않는다. `YOLO_WEIGHTS` 환경변수로 파일 경로를 준다.

@@ -15,6 +15,7 @@ class Config:
     edge_margin_ratio: float = 0.05
     cache_dir: str = "/var/lib/analyzer/cache"
     admin_internal_base_url: str = "http://localhost:8082"
+    result_retry_buffer_sec: int = 300
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -31,5 +32,8 @@ class Config:
             cache_dir=os.environ.get("CACHE_DIR", "/var/lib/analyzer/cache"),
             admin_internal_base_url=os.environ.get(
                 "ADMIN_INTERNAL_BASE_URL", "http://localhost:8082"
+            ),
+            result_retry_buffer_sec=int(
+                os.environ.get("RESULT_RETRY_BUFFER_SEC", "300")
             ),
         )

@@ -19,7 +19,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
-            internal_token=os.environ.get("INTERNAL_TOKEN", ""),
+            internal_token=os.environ.get("INTERNAL_API_TOKEN", ""),
             yolo_weights=os.environ.get("YOLO_WEIGHTS") or None,
             host=os.environ.get("HOST", "0.0.0.0"),
             port=int(os.environ.get("PORT", "5000")),

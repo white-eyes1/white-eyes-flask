@@ -16,7 +16,7 @@ SOURCE_TYPES = {"LIVE", "DUMMY"}
 def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        return _invalid_request([("body", "JSON 객체여야 합니다.")])
+        return _invalid_input([("body", "JSON 객체여야 합니다.")])
 
     source_type = body.get("sourceType")
     source_uri = body.get("sourceUri")
@@ -26,7 +26,7 @@ def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     if not isinstance(source_uri, str):
         problems.append(("sourceUri", "문자열이어야 합니다."))
     if problems:
-        return _invalid_request(problems)
+        return _invalid_input(problems)
 
     service: CameraService = current_app.extensions["camera_service"]
     try:
@@ -40,8 +40,8 @@ def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     return {"cameraId": camera_id, "status": status}
 
 
-def _invalid_request(problems: list[tuple[str, str]]) -> tuple[Response, int]:
+def _invalid_input(problems: list[tuple[str, str]]) -> tuple[Response, int]:
     field_errors = [{"field": field, "message": text} for field, text in problems]
     return error_response(
-        "INVALID_REQUEST", "요청 형식이 올바르지 않습니다.", 400, field_errors
+        "INVALID_INPUT", "요청 형식이 올바르지 않습니다.", 400, field_errors
     )

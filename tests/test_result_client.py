@@ -1,4 +1,5 @@
 import json
+import logging
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -101,6 +102,49 @@ def test_connection_failure_is_worth_retrying_and_hides_the_token(caplog):
     assert TOKEN not in caplog.text
 
 
+def test_repeated_failures_are_logged_only_now_and_then_and_recovery_once(
+    server, caplog
+):
+    c = client(server)
+    server.status = 503
+    with caplog.at_level(logging.INFO):
+        for _ in range(61):
+            assert c.send(ITEMS) == SendResult.RETRY
+        failures = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(failures) == 3  # 1번째, 30번째, 60번째
+        server.status = 204
+        assert c.send(ITEMS) == SendResult.OK
+        assert "복구" in caplog.records[-1].getMessage()
+        assert c.send(ITEMS) == SendResult.OK
+        assert sum("복구" in r.getMessage() for r in caplog.records) == 1  # 한 번만
+        server.status = 503
+        c.send(ITEMS)
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 4
+
+
+def test_a_broken_response_is_worth_retrying_not_an_unhandled_error():
+    # HTTP 응답이 아닌 것을 돌려주는 서버(BadStatusLine)
+    broken = socket.socket()
+    broken.bind(("127.0.0.1", 0))
+    broken.listen(1)
+
+    def answer():
+        connection, _ = broken.accept()
+        connection.recv(65536)
+        connection.sendall(b"not http at all\r\n\r\n")
+        connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    try:
+        port = broken.getsockname()[1]
+        result = ResultClient(f"http://127.0.0.1:{port}", TOKEN, timeout=2.0).send(
+            ITEMS
+        )
+    finally:
+        broken.close()
+    assert result == SendResult.RETRY
+
+
 def test_redirect_is_not_followed_and_is_retried(server):
     # 토큰이 다른 주소로 따라가지 않게 한다. 리다이렉트는 예상 밖 응답이라 재시도 대상이다.
     server.status = 307
@@ -116,7 +160,9 @@ def test_timeout_is_worth_retrying():
     silent.listen(1)
     try:
         port = silent.getsockname()[1]
-        result = ResultClient(f"http://127.0.0.1:{port}", TOKEN, timeout=0.3).send(ITEMS)
+        result = ResultClient(f"http://127.0.0.1:{port}", TOKEN, timeout=0.3).send(
+            ITEMS
+        )
     finally:
         silent.close()
     assert result == SendResult.RETRY

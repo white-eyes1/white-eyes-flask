@@ -59,6 +59,29 @@ def test_no_sender_is_started_when_a_player_is_injected():
     assert "result_sender" not in app.extensions
 
 
+def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
+    import white_eyes_flask
+
+    sender = FakeSender()
+    events = []
+
+    class FakeApp:
+        extensions = {"result_sender": sender}
+
+        def run(self, host, port):
+            events.append(("run", host, port))
+            raise KeyboardInterrupt  # 서버가 Ctrl+C로 끝난다
+
+    monkeypatch.setattr(white_eyes_flask, "load_dotenv", lambda: None)
+    monkeypatch.setattr(white_eyes_flask, "create_app", lambda config: FakeApp())
+    served = Config(internal_token="t", yolo_weights=None, host="127.0.0.1", port=5001)
+    monkeypatch.setattr(white_eyes_flask.Config, "from_env", lambda: served)
+    with pytest.raises(KeyboardInterrupt):
+        white_eyes_flask.main()
+    assert events == [("run", "127.0.0.1", 5001)]
+    assert sender.stopped == 1
+
+
 def test_the_real_run_builds_a_sender_from_the_config(monkeypatch):
     built = {}
 

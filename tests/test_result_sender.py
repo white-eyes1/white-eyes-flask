@@ -143,9 +143,9 @@ def test_two_minutes_of_outage_are_filled_when_the_server_comes_back():
 
 def test_expiry_is_checked_again_between_batches():
     sender, queue, client, clock = make(batch_size=2)
-    for epoch in (T0 - RETRY_SEC + 1, T0 - RETRY_SEC + 1, T0 - RETRY_SEC + 2, T0):
+    for epoch in (T0 - RETRY_SEC + 1, T0 - RETRY_SEC + 1, T0 - RETRY_SEC + 1, T0):
         queue.put(item(1, epoch))
-    # 첫 묶음을 보내는 동안 시간이 지나 두 번째 묶음의 앞 항목이 만료된다
+    # 첫 묶음을 보내는 동안 2초가 지나 두 번째 묶음의 앞 항목(T0-299)이 만료된다(기준 T0-298)
     client.on_send = lambda n: setattr(clock, "now", T0 + 2) if n == 1 else None
     sender.tick()
     assert len(client.batches[0]) == 2
@@ -325,6 +325,69 @@ def test_can_be_started_again_after_stop():
         assert wait_for(lambda: len(client.batches) >= 1)
     finally:
         sender.stop()
+
+
+def test_expired_results_are_removed_before_the_buffer_cap_is_applied():
+    sender, queue, client, _ = make(FakeClient([SendResult.RETRY]), max_buffer=3)
+    fresh = [item(1, T0 - 1, count=index) for index in range(3)]
+    for result in fresh:
+        queue.put(result)
+    for index in range(5):
+        queue.put(item(1, T0 - RETRY_SEC - 10, count=100 + index))  # 이미 만료
+    sender.tick()
+    assert client.batches == [fresh]  # 멀쩡한 결과가 상한 때문에 밀려나지 않는다
+
+
+def test_a_result_that_cannot_be_turned_into_json_does_not_block_the_others(caplog):
+    sender, queue, client, _ = make()
+    good = item(1, T0 - 1)
+    queue.put({**item(1, T0 - 1), "dwellSec": {1, 2}})  # set은 JSON이 되지 않는다
+    queue.put(good)
+    with caplog.at_level(logging.WARNING):
+        sender.tick()
+    assert client.batches == [[good]]
+    assert "버림" in caplog.text
+
+
+def test_a_time_out_of_range_does_not_break_the_tick():
+    sender, queue, client, _ = make()
+    good = item(1, T0 - 1)
+    queue.put({**item(1, T0 - 1), "at": "0001-01-01T00:00:00+09:00"})
+    queue.put({**item(1, T0 - 1), "at": "9999-12-31T23:59:59-23:59"})
+    queue.put(good)
+    sender.tick()
+    assert client.batches == [[good]]
+
+
+def test_the_last_attempt_sends_only_one_request_even_with_a_backlog():
+    sender, queue, client, _ = make(batch_size=2, max_batches_per_tick=5)
+    for index in range(10):
+        queue.put(item(1, T0 - 1, count=index))
+    sender.tick(final=True)
+    assert len(client.batches) == 1
+
+
+def test_start_from_many_threads_at_once_runs_a_single_sender_thread():
+    def sender_threads():
+        return [t for t in threading.enumerate() if t.name == "result-sender"]
+
+    before = len(sender_threads())
+    sender, _ = real_clock_sender(FakeClient())
+    starters = [threading.Thread(target=sender.start) for _ in range(8)]
+    for starter in starters:
+        starter.start()
+    for starter in starters:
+        starter.join(timeout=2)
+    try:
+        assert len(sender_threads()) == before + 1
+    finally:
+        sender.stop()
+
+
+def test_batch_size_cannot_exceed_the_api_limit():
+    ResultSender(ResultQueue(), FakeClient(), retry_buffer_sec=300, batch_size=2000)
+    with pytest.raises(ValueError):
+        ResultSender(ResultQueue(), FakeClient(), retry_buffer_sec=300, batch_size=2001)
 
 
 def test_invalid_settings_are_rejected():

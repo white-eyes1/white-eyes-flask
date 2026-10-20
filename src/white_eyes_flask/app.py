@@ -2,6 +2,8 @@ import hmac
 
 from flask import Flask, jsonify, request
 
+from white_eyes_flask.camera.camera_controller import camera_bp
+from white_eyes_flask.camera.camera_service import CameraService
 from white_eyes_flask.config import Config
 
 TOKEN_HEADER = "X-Internal-Token"
@@ -10,6 +12,10 @@ TOKEN_HEADER = "X-Internal-Token"
 def create_app(config: Config | None = None) -> Flask:
     app = Flask(__name__)
     app.config["APP_CONFIG"] = config or Config.from_env()
+    app.extensions["camera_service"] = CameraService(
+        app.config["APP_CONFIG"].media_root
+    )
+    app.register_blueprint(camera_bp)
 
     @app.before_request
     def check_internal_token():

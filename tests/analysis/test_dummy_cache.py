@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from white_eyes_flask.analysis.dummy_cache import DummyCache
+from white_eyes_flask.analysis.dummy_cache import CacheInvalidError, DummyCache
 from white_eyes_flask.analysis.result import TrackedBox
 
 SOURCE = "dummy/videos/festival.mp4"
@@ -211,3 +211,87 @@ def test_old_result_json_is_removed_before_new_boxes_are_published(cache):
             module.os.replace = original
     assert seen == {"old_result_still_there": False}
     assert cache.has(SOURCE) is True
+
+
+def valid_seconds(count=3):
+    zero = {"N": 0, "E": 0, "S": 0, "W": 0}
+    return [
+        {
+            "sec": s,
+            "personCount": s,
+            "in": dict(zero),
+            "out": dict(zero),
+            "dwellSec": [],
+        }
+        for s in range(count)
+    ]
+
+
+def test_result_file_keeps_the_video_duration(cache):
+    with cache.writer(SOURCE, fps=5) as writer:
+        writer.commit(valid_seconds(3), 2.4)
+    data = json.loads(cache.result_path(SOURCE).read_text(encoding="utf-8"))
+    assert data["durationSec"] == 2.4
+
+
+def test_result_file_has_no_duration_when_not_given(cache):
+    publish(cache, valid_seconds(2))
+    data = json.loads(cache.result_path(SOURCE).read_text(encoding="utf-8"))
+    assert "durationSec" not in data
+
+
+def test_load_returns_seconds_and_duration(cache):
+    with cache.writer(SOURCE, fps=5) as writer:
+        writer.commit(valid_seconds(3), 2.4)
+    cached = cache.load(SOURCE)
+    assert cached.seconds == valid_seconds(3)
+    assert cached.duration_sec == 2.4
+
+
+def test_load_falls_back_to_the_number_of_seconds_without_duration(cache):
+    publish(cache, valid_seconds(4))
+    assert cache.load(SOURCE).duration_sec == 4.0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{깨진 json",
+        "[]",
+        '{"version": 1}',
+        '{"version": 1, "seconds": []}',
+        '{"version": 1, "seconds": [{"sec": 1, "personCount": 0}]}',
+        '{"version": 1, "seconds": [{"sec": 0, "personCount": "x", "in": {}, "out": {}, "dwellSec": []}]}',
+        '{"version": 1, "seconds": [{"sec": 0, "personCount": 1, "in": {}, "out": {}, "dwellSec": "x"}]}',
+    ],
+)
+def test_load_rejects_broken_files(cache, content):
+    publish(cache, valid_seconds(1))
+    cache.result_path(SOURCE).write_text(content, encoding="utf-8")
+    with pytest.raises(CacheInvalidError):
+        cache.load(SOURCE)
+
+
+@pytest.mark.parametrize("duration", [0, -1, float("nan"), float("inf"), 99])
+def test_load_rejects_impossible_durations(cache, duration):
+    with cache.writer(SOURCE, fps=5) as writer:
+        writer.commit(valid_seconds(3), duration)
+    with pytest.raises(CacheInvalidError):
+        cache.load(SOURCE)
+
+
+def test_load_of_a_missing_cache_is_invalid(cache):
+    with pytest.raises(CacheInvalidError):
+        cache.load(SOURCE)
+
+
+def test_invalidate_removes_both_files(cache):
+    publish(cache, valid_seconds(1))
+    cache.invalidate(SOURCE)
+    assert cache.has(SOURCE) is False
+    assert not cache.result_path(SOURCE).exists()
+    assert not cache.boxes_path(SOURCE).exists()
+
+
+def test_invalidate_without_files_is_harmless(cache):
+    cache.invalidate(SOURCE)

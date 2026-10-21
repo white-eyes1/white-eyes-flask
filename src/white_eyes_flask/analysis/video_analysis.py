@@ -2,6 +2,7 @@
 
 import math
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,12 @@ class AnalysisStopped(Exception):
     """정지 요청으로 분석을 중단함."""
 
 
+@dataclass(frozen=True)
+class AnalysisResult:
+    seconds: list[dict[str, Any]]  # 영상 시각 기준 초별 결과
+    duration_sec: float  # 영상 길이(읽은 프레임 수 / 영상 fps)
+
+
 def analyze_video(
     path: str | Path,
     detector: Detector,
@@ -38,7 +45,7 @@ def analyze_video(
     writer: DummyResultWriter,
     stop: threading.Event,
     on_progress: Callable[[int], None],
-) -> list[dict[str, Any]]:
+) -> AnalysisResult:
     """영상을 처음부터 끝까지 분석해 초별 결과를 돌려주고 프레임별 박스는 writer에 쓴다.
 
     분석 프레임은 영상 시각 기준으로 초당 fps개를 고른다(슬롯 = 영상 시각 x fps).
@@ -81,7 +88,7 @@ def _analyze(
     writer: DummyResultWriter,
     stop: threading.Event,
     on_progress: Callable[[int], None],
-) -> list[dict[str, Any]]:
+) -> AnalysisResult:
     tracker = CameraTracker(detector, conf_thres, track_buffer=fps)
     edge = EdgeCounter(edge_margin, lost_frames=fps, fps=fps)
     person_totals: dict[int, list[int]] = {}  # 초 -> [인원 합, 프레임 수]
@@ -135,7 +142,10 @@ def _analyze(
     if last_edge_slot is not None:
         edge.update({}, frame_no=last_edge_slot + fps)  # 끝난 뒤 1초 동안 안 보임
     _merge(edge_by_second, current_second, edge.pop_counts())
-    return _build_seconds(current_second, person_totals, edge_by_second)
+    seconds = _build_seconds(current_second, person_totals, edge_by_second)
+    # 영상 길이 L = 읽은 프레임 수 / 영상 fps. 재생(FNC-S-010)이 반복 경계로 쓴다.
+    duration = min((index + 1) / video_fps, float(len(seconds)))
+    return AnalysisResult(seconds=seconds, duration_sec=round(duration, 3))
 
 
 def _report_progress(

@@ -6,17 +6,21 @@ from white_eyes_flask.analysis.detector_provider import LazyDetectorProvider
 from white_eyes_flask.analysis.dummy_cache import DummyCache
 from white_eyes_flask.camera.camera_controller import camera_bp
 from white_eyes_flask.camera.camera_service import CameraService
+from white_eyes_flask.camera.dummy_player import DummyPlayer
+from white_eyes_flask.camera.player import Player
 from white_eyes_flask.camera.preparer import DummyPreparer, Preparer
+from white_eyes_flask.camera.recording_registrar import RecordingRegistrar
+from white_eyes_flask.camera.result_queue import ResultQueue
 from white_eyes_flask.camera.status_reporter import StatusReporter
 from white_eyes_flask.config import Config
 
 TOKEN_HEADER = "X-Internal-Token"
 
 
-def build_preparer(config: Config) -> DummyPreparer:
+def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
     return DummyPreparer(
         media_root=config.media_root,
-        cache=DummyCache(config.cache_dir, config.media_root),
+        cache=cache,
         detector_provider=LazyDetectorProvider(
             config.yolo_weights, config.detect_imgsz, config.detect_conf
         ),
@@ -27,12 +31,33 @@ def build_preparer(config: Config) -> DummyPreparer:
     )
 
 
-def create_app(config: Config | None = None, preparer: Preparer | None = None) -> Flask:
+def build_player(
+    config: Config, cache: DummyCache, result_queue: ResultQueue
+) -> DummyPlayer:
+    return DummyPlayer(
+        cache,
+        RecordingRegistrar(config.admin_internal_base_url, config.internal_token),
+        result_queue,
+        StatusReporter(config.admin_internal_base_url, config.internal_token),
+    )
+
+
+def create_app(
+    config: Config | None = None,
+    preparer: Preparer | None = None,
+    player: Player | None = None,
+) -> Flask:
     app = Flask(__name__)
     config = config or Config.from_env()
     app.config["APP_CONFIG"] = config
+    cache = DummyCache(config.cache_dir, config.media_root)
+    # 1초 결과 전송 큐. 보내는 쪽(FNC-S-006)이 이 큐를 비운다.
+    result_queue = ResultQueue()
+    app.extensions["result_queue"] = result_queue
     app.extensions["camera_service"] = CameraService(
-        config.media_root, preparer or build_preparer(config)
+        config.media_root,
+        preparer or build_preparer(config, cache),
+        player or build_player(config, cache, result_queue),
     )
     app.register_blueprint(camera_bp)
 

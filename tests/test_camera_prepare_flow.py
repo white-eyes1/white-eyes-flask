@@ -8,6 +8,7 @@ import pytest
 
 from white_eyes_flask.camera.camera_job import CameraStatus
 from white_eyes_flask.camera.camera_service import CameraService
+from white_eyes_flask.camera.player import PlayOutcome
 from white_eyes_flask.camera.preparer import NullPreparer, PrepareOutcome
 
 URI = "dummy/videos/a.mp4"
@@ -148,5 +149,96 @@ def test_null_preparer_keeps_the_job_preparing_until_stopped(media_root):
         time.sleep(0.1)
         assert job_of(service, 7).is_alive()
         assert job_of(service, 7).status == CameraStatus.PREPARING
+    finally:
+        service.shutdown()
+
+
+class FakePlayer:
+    def __init__(self, outcome=None, hold=True):
+        self.outcome = outcome
+        self.hold = hold
+        self.calls = []
+        self.entered = threading.Event()
+
+    def play(self, camera_id, source_uri, stop):
+        self.calls.append((camera_id, source_uri))
+        self.entered.set()
+        if self.outcome is not None:
+            return self.outcome
+        stop.wait()
+        return PlayOutcome.STOPPED
+
+
+def make_service_with_player(media_root, preparer, player) -> CameraService:
+    return CameraService(str(media_root), preparer=preparer, player=player)
+
+
+def test_player_starts_after_preparation_is_done(media_root):
+    player = FakePlayer()
+    service = make_service_with_player(
+        media_root, FakePreparer(outcome=PrepareOutcome.DONE), player
+    )
+    try:
+        service.start(7, "DUMMY", URI)
+        assert player.entered.wait(timeout=3)
+        assert player.calls == [(7, URI)]
+        assert job_of(service, 7).status == CameraStatus.RUNNING
+    finally:
+        service.shutdown()
+
+
+def test_player_is_not_started_when_preparation_fails(media_root):
+    player = FakePlayer()
+    service = make_service_with_player(
+        media_root, FakePreparer(outcome=PrepareOutcome.FAILED), player
+    )
+    try:
+        service.start(7, "DUMMY", URI)
+        assert wait_until(lambda: not job_of(service, 7).is_alive())
+        assert player.calls == []
+    finally:
+        service.shutdown()
+
+
+def test_cached_video_goes_straight_to_the_player_without_preparing(media_root):
+    preparer = FakePreparer(cached=True)
+    player = FakePlayer()
+    service = make_service_with_player(media_root, preparer, player)
+    try:
+        assert service.start(7, "DUMMY", URI) == CameraStatus.RUNNING
+        assert player.entered.wait(timeout=3)
+        assert preparer.calls == []
+    finally:
+        service.shutdown()
+
+
+def test_job_ends_with_error_when_the_player_fails(media_root):
+    player = FakePlayer(outcome=PlayOutcome.FAILED)
+    service = make_service_with_player(media_root, FakePreparer(cached=True), player)
+    try:
+        service.start(7, "DUMMY", URI)
+        assert wait_until(lambda: not job_of(service, 7).is_alive())
+        assert job_of(service, 7).status == CameraStatus.ERROR
+    finally:
+        service.shutdown()
+
+
+def test_stop_ends_a_playing_job(media_root):
+    player = FakePlayer()
+    service = make_service_with_player(media_root, FakePreparer(cached=True), player)
+    service.start(7, "DUMMY", URI)
+    assert player.entered.wait(timeout=3)
+    started = time.time()
+    service.stop(7)
+    assert time.time() - started < 2
+    assert service.job_count() == 0
+
+
+def test_without_a_player_a_running_job_waits_until_stopped(media_root):
+    service = make_service(media_root, FakePreparer(cached=True))
+    try:
+        service.start(7, "DUMMY", URI)
+        time.sleep(0.1)
+        assert job_of(service, 7).is_alive()
     finally:
         service.shutdown()

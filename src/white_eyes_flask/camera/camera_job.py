@@ -2,6 +2,7 @@ import logging
 import threading
 from enum import StrEnum
 
+from white_eyes_flask.camera.player import NullPlayer, PlayOutcome, Player
 from white_eyes_flask.camera.preparer import NullPreparer, PrepareOutcome, Preparer
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class CameraJob:
         source_uri: str,
         status: CameraStatus,
         preparer: Preparer | None = None,
+        player: Player | None = None,
     ) -> None:
         self.camera_id = camera_id
         self.source_uri = source_uri
@@ -31,6 +33,7 @@ class CameraJob:
         self._status_lock = threading.Lock()
         self._status = status
         self._preparer = preparer or NullPreparer()
+        self._player = player or NullPlayer()
         self._stop_flag = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name=f"cam-{camera_id}", daemon=True
@@ -75,6 +78,13 @@ class CameraJob:
             if outcome == PrepareOutcome.STOPPED:
                 return
             self.status = CameraStatus.RUNNING
-        # 재생(FNC-S-010) 본문은 해당 이슈에서 채운다.
-        # 지금은 정지 플래그가 설정될 때까지 대기한다.
-        self._stop_flag.wait()
+        # 캐시된 결과를 실제 시간에 맞춰 내보낸다(FNC-S-010). 정지될 때까지 이어진다.
+        try:
+            outcome = self._player.play(
+                self.camera_id, self.source_uri, self._stop_flag
+            )
+        except Exception:
+            logger.exception("더미 재생 중 예외 cameraId=%s", self.camera_id)
+            outcome = PlayOutcome.FAILED
+        if outcome == PlayOutcome.FAILED:
+            self.status = CameraStatus.ERROR

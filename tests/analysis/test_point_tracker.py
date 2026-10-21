@@ -1,3 +1,5 @@
+"""FNC-S-003 중심점 추적기 (PointTracker)"""
+
 import numpy as np
 import pytest
 

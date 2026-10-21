@@ -1,3 +1,5 @@
+"""FNC-S-010 녹화 등록 (RecordingRegistrar)"""
+
 import json
 import threading
 from datetime import datetime

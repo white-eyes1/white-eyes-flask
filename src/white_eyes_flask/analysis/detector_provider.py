@@ -1,3 +1,5 @@
+"""FNC-S-003 탐지 모델을 처음 쓸 때 한 번만 불러오는 공급자"""
+
 import logging
 import threading
 from pathlib import Path

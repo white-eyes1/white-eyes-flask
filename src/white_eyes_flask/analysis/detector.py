@@ -1,3 +1,5 @@
+"""FNC-S-003 사람 탐지기 (YOLO-CROWD)와 탐지기 공통 약속"""
+
 import logging
 import sys
 import threading

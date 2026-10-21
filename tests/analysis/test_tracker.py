@@ -1,3 +1,5 @@
+"""FNC-S-003 캠 하나의 탐지·추적 (CameraTracker)"""
+
 import numpy as np
 import pytest
 

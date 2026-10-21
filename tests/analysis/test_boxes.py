@@ -1,3 +1,5 @@
+"""FNC-S-003 탐지 박스 정리 (sanitize_boxes, dedupe_boxes)"""
+
 import numpy as np
 import pytest
 

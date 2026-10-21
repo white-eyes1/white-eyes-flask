@@ -1,3 +1,5 @@
+"""FNC-S-003 사람 탐지기 (YoloCrowdDetector)"""
+
 import numpy as np
 import pytest
 import torch

@@ -1,3 +1,5 @@
+"""FNC-S-003 VisDrone 사람 탐지기"""
+
 import threading
 from pathlib import Path
 from typing import Any

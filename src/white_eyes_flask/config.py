@@ -39,7 +39,5 @@ class Config:
                 os.environ.get("RESULT_RETRY_BUFFER_SEC", "300")
             ),
             detector=os.environ.get("DETECTOR", "visdrone"),
-            detect_dedupe_overlap=float(
-                os.environ.get("DETECT_DEDUPE_OVERLAP", "0")
-            ),
+            detect_dedupe_overlap=float(os.environ.get("DETECT_DEDUPE_OVERLAP", "0")),
         )

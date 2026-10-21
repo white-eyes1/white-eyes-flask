@@ -29,13 +29,25 @@ class CameraJob:
     ) -> None:
         self.camera_id = camera_id
         self.source_uri = source_uri
-        self.status = status
+        # 작업 스레드가 쓰고 CameraService.start()가 호출 스레드에서 읽는다(code-conventions 4-3).
+        self._status_lock = threading.Lock()
+        self._status = status
         self._preparer = preparer or NullPreparer()
         self._player = player or NullPlayer()
         self._stop_flag = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name=f"cam-{camera_id}", daemon=True
         )
+
+    @property
+    def status(self) -> CameraStatus:
+        with self._status_lock:
+            return self._status
+
+    @status.setter
+    def status(self, value: CameraStatus) -> None:
+        with self._status_lock:
+            self._status = value
 
     def start(self) -> None:
         self._thread.start()

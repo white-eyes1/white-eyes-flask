@@ -32,7 +32,7 @@ class RegistrationWorker:
 
     관리자 앱이 느리거나 꺼져 있어도 1초 결과가 밀리지 않는다. 일시 오류는 같은
     startedAt으로 retry_interval마다 다시 보내고, retry_window를 넘기면 포기하고 다음
-    반복으로 넘어간다. 거절(400·401·404)은 다시 보내지 않는다. inline=True이면 호출한
+    반복으로 넘어간다. 거절(400)은 다시 보내지 않는다. inline=True이면 호출한
     스레드에서 바로 한 번만 보낸다(시험용).
     """
 

@@ -38,7 +38,21 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 
 ## 가중치
 
-모델 가중치(`*.pt`)는 커밋하지 않는다(`weights/`는 `.gitignore`). `YOLO_WEIGHTS` 환경변수로 파일 경로를 준다.
+모델 가중치(`*.pt`)는 커밋하지 않는다(`weights/`는 `.gitignore`). `YOLO_WEIGHTS` 환경변수로 파일 경로를 주고, `DETECTOR`로 어느 모델의 가중치인지 알려 준다(기본 `visdrone`).
+
+### 기본: VisDrone YOLOv8m (`DETECTOR=visdrone`)
+
+위에서 내려다본 사람 몸을 찾는 모델이다. 출처는 https://huggingface.co/mshamrai/yolov8m-visdrone 의 `best.pt`이고, 시험에 쓴 파일은 아래 해시와 같다. 라이선스는 **PM이 정할 때까지 미확인**이다(Ultralytics AGPL-3.0, 학습 데이터 VisDrone은 연구 목적 공개). 그래서 이 저장소와 `white-eyes-assets`에는 올리지 않았다. 가중치도 pickle 형식이라 믿을 수 있는 파일만 쓴다.
+
+```bash
+curl -L -o weights/visdrone-yolov8m.pt https://huggingface.co/mshamrai/yolov8m-visdrone/resolve/main/best.pt
+sha256sum weights/visdrone-yolov8m.pt   # Windows PowerShell: (Get-FileHash weights\visdrone-yolov8m.pt).Hash
+# SHA-256: C1A19706FE83E8282795FB6C6CEC6A5E2A6E515C9B5FE4F558863D987EE24F8B (52,006,688바이트)
+```
+
+`.env`에는 `YOLO_WEIGHTS=./weights/visdrone-yolov8m.pt`처럼 적는다. 입력 크기는 `DETECT_IMGSZ`(기본 960), 같은 사람을 둘로 센 박스를 합치는 기준은 `DETECT_DEDUPE_OVERLAP`(기본 0=합치지 않음, 켜려면 0.25 정도)이다.
+
+### 이전: YOLO-CROWD (`DETECTOR=yolo-crowd`)
 
 가중치 `yolo-crowd.pt`는 비공개 저장소 `white-eyes1/white-eyes-assets`의 Release `yolo-crowd-v1`에 있다(출처: https://github.com/zaki1003/YOLO-CROWD README의 Postweight). `gh`로 로그인한 뒤 받고, **받은 뒤 해시를 꼭 확인한다**(가중치는 pickle 형식이라 `torch.load(weights_only=False)`로 읽으므로 믿을 수 있는 파일만 쓴다).
 
@@ -48,7 +62,7 @@ sha256sum weights/yolo-crowd.pt      # Windows PowerShell: (Get-FileHash weights
 # SHA-256: 22aea94cad4eb181e94ea600b0013cf7307b1a4dd8788cc8454dc5ca5f573c39
 ```
 
-`.env`에는 `YOLO_WEIGHTS=./weights/yolo-crowd.pt`처럼 적는다.
+`.env`에는 `DETECTOR=yolo-crowd`와 `YOLO_WEIGHTS=./weights/yolo-crowd.pt`처럼 적는다. 위에서 내려다본 영상에서는 정수리만 보여 사람을 많이 놓친다(40명이 보이는 장면에서 2명).
 
 ## vendor/ 출처
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TrackedBox:
-    """한 프레임의 사람 머리 박스. 좌표는 모두 영상 크기 대비 0~1 비율이다.
+    """한 프레임의 사람 박스(VisDrone은 몸 전체). 좌표는 모두 영상 크기 대비 0~1 비율이다.
 
     x, y는 박스의 왼쪽 위 모서리, cx, cy는 중심점이다.
     track_id가 None이면 아직 추적 번호가 없는 박스(인원에는 넣고 이동 판정에서는 뺀다).

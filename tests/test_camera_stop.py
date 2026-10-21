@@ -9,6 +9,7 @@ import pytest
 
 from white_eyes_flask import create_app
 from white_eyes_flask.camera import camera_job, camera_service
+from white_eyes_flask.camera.preparer import NullPreparer
 from white_eyes_flask.config import Config
 
 TOKEN = "test-token"
@@ -40,7 +41,7 @@ def app(tmp_path: Path):
         port=5000,
         media_root=str(tmp_path),
     )
-    app = create_app(config)
+    app = create_app(config, preparer=NullPreparer())
     yield app
     app.extensions["camera_service"].shutdown()
 

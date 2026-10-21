@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from white_eyes_flask import create_app
+from white_eyes_flask.camera.preparer import NullPreparer
 from white_eyes_flask.config import Config
 
 TOKEN = "test-token"
@@ -31,7 +32,7 @@ def app(media_root: Path):
         port=5000,
         media_root=str(media_root),
     )
-    app = create_app(config)
+    app = create_app(config, preparer=NullPreparer())
     yield app
     app.extensions["camera_service"].shutdown()
 

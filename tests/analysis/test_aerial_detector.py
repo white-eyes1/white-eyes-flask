@@ -95,14 +95,14 @@ def test_boxes_are_clipped_and_bad_values_dropped():
 
 
 def test_duplicate_boxes_of_one_person_are_merged():
-    detector, _ = make([[100, 20, 140, 140, 0.9], [105, 100, 135, 150, 0.6]])
+    detector, _ = make(
+        [[100, 20, 140, 140, 0.9], [105, 100, 135, 150, 0.6]], dedupe_overlap=0.25
+    )
     assert len(detector.detect(FRAME)) == 1
 
 
-def test_dedupe_can_be_turned_off():
-    detector, _ = make(
-        [[100, 20, 140, 140, 0.9], [105, 100, 135, 150, 0.6]], dedupe_overlap=0
-    )
+def test_dedupe_is_off_by_default():
+    detector, _ = make([[100, 20, 140, 140, 0.9], [105, 100, 135, 150, 0.6]])
     assert len(detector.detect(FRAME)) == 2
 
 

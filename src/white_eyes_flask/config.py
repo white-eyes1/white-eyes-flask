@@ -17,7 +17,7 @@ class Config:
     admin_internal_base_url: str = "http://localhost:8082"
     result_retry_buffer_sec: int = 300
     detector: str = "visdrone"
-    detect_dedupe_overlap: float = 0.25
+    detect_dedupe_overlap: float = 0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -40,6 +40,6 @@ class Config:
             ),
             detector=os.environ.get("DETECTOR", "visdrone"),
             detect_dedupe_overlap=float(
-                os.environ.get("DETECT_DEDUPE_OVERLAP", "0.25")
+                os.environ.get("DETECT_DEDUPE_OVERLAP", "0")
             ),
         )

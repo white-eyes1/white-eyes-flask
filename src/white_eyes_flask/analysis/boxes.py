@@ -1,6 +1,7 @@
 import numpy as np
 
-DEDUPE_OVERLAP = 0.25
+DEDUPE_OVERLAP = 0.25  # 합치기를 켤 때의 기준
+DEFAULT_DEDUPE_OVERLAP = 0  # 기본은 끔(결정 0015)
 
 
 def sanitize_boxes(boxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:

@@ -11,15 +11,16 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TOKEN_HEADER = "X-Internal-Token"
-# 다시 보내면 성공할 수 있는 4xx
-_RETRYABLE_CLIENT_ERRORS = {408, 429}
+# 같은 묶음을 다시 보내도 소용없는 응답은 형식 오류(400)뿐이다. 그 밖의 4xx(토큰 설정 실수인
+# 401·403 포함)는 원인을 고친 뒤 보관 중인 결과를 살릴 수 있도록 다시 보낸다(PM 결정).
+_REJECTED_STATUSES = {400}
 _LOG_EVERY = 30
 
 
 class SendResult(StrEnum):
     OK = "OK"
-    RETRY = "RETRY"  # 연결 실패·타임아웃·5xx·408·429 같은 일시 오류: 다시 보낼 만함
-    REJECTED = "REJECTED"  # 400·401 같은 4xx: 같은 묶음을 다시 보내도 소용없음
+    RETRY = "RETRY"  # 연결 실패·타임아웃·5xx와 400을 뺀 4xx(401·403·408·429 등): 다시 보낼 만함
+    REJECTED = "REJECTED"  # 400(형식 오류): 같은 묶음을 다시 보내도 소용없음
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -65,10 +66,17 @@ class ResultClient:
         return SendResult.RETRY
 
     def _failed(self, status: int, count: int) -> SendResult:
-        if 400 <= status < 500 and status not in _RETRYABLE_CLIENT_ERRORS:
+        if status in _REJECTED_STATUSES:
             self._failures = 0  # 서버는 응답했다
             logger.error("결과 전송 거절 status=%s(%s건)", status, count)
             return SendResult.REJECTED
+        if status in (401, 403):
+            self._warn(
+                "결과 전송 인증 실패 status=%s(%s건), 토큰 설정을 확인하세요",
+                status,
+                count,
+            )
+            return SendResult.RETRY
         self._warn("결과 전송 실패 status=%s(%s건)", status, count)
         return SendResult.RETRY
 

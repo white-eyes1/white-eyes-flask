@@ -100,13 +100,14 @@ def test_the_real_run_builds_a_sender_from_the_config(monkeypatch):
     monkeypatch.setattr(app_module, "ResultClient", RecordingClient)
     app = create_app(
         config(
-            admin_internal_base_url="http://admin:8082", result_retry_buffer_sec=240
+            admin_internal_base_url="http://admin:8082/admin",
+            result_retry_buffer_sec=240,
         ),
         preparer=FakePreparer(),
     )
     sender = app.extensions["result_sender"]
     assert sender.started == 1
-    assert built["base_url"] == "http://admin:8082"
+    assert built["base_url"] == "http://admin:8082/admin"
     assert built["token"] == "t0ken"
     assert built["retry"] == 240
     # 재생기가 넣는 큐를 보내는 쪽이 비운다(같은 큐)

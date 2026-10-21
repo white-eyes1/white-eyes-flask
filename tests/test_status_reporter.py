@@ -57,6 +57,15 @@ def test_report_sends_patch_with_token_and_json_body(server):
     ]
 
 
+@pytest.mark.parametrize("suffix", ["/admin", "/admin/"])
+def test_admin_context_path_in_the_base_url_reaches_the_internal_api(server, suffix):
+    reporter = StatusReporter(base_url(server) + suffix, TOKEN)
+    assert reporter.report(7, "RUNNING", progress=100) is True
+    assert [r["path"] for r in server.received] == [
+        "/admin/internal/v1/cameras/7/status"
+    ]
+
+
 def test_report_error_includes_message(server):
     reporter = StatusReporter(base_url(server), TOKEN)
     reporter.report(7, "ERROR", error_message="영상 파일을 읽을 수 없음")

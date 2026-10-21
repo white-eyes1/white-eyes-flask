@@ -57,6 +57,13 @@ def register(reg):
     return reg.register(7, STARTED_MS, "dummy/videos/a.mp4", "dummy/boxes/a.json.gz")
 
 
+@pytest.mark.parametrize("suffix", ["/admin", "/admin/"])
+def test_admin_context_path_in_the_base_url_reaches_the_internal_api(server, suffix):
+    base_url = f"http://127.0.0.1:{server.server_address[1]}{suffix}"
+    assert register(RecordingRegistrar(base_url, TOKEN)) == RegisterResult.OK
+    assert [r["path"] for r in server.received] == ["/admin/internal/v1/recordings"]
+
+
 def test_posts_the_recording_without_ended_at(server):
     assert register(registrar(server)) == RegisterResult.OK
     assert server.received == [

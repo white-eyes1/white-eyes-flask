@@ -72,7 +72,8 @@ class CameraService:
             if job is None:
                 return
 
-            # 녹화 파일 마무리(FNC-S-008 4~6번)와 준비 취소(FNC-S-009)는 해당 이슈에서 채운다.
+            # 녹화 파일 마무리(FNC-S-008 4~6번)는 해당 이슈에서 채운다.
+            # 준비 취소(FNC-S-009)는 정지 플래그로 준비 루프가 스스로 멈추고 임시 파일을 지운다.
             # 전송 대기 중인 결과는 건드리지 않는다(전송 작업이 보냄).
             stopped = job.stop(STOP_WAIT_SEC)
 

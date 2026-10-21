@@ -133,7 +133,9 @@ def test_repeated_failures_are_logged_only_now_and_then_and_recovery_once(
 def test_redirect_is_not_followed_and_is_retried(server):
     # 토큰이 다른 주소로 따라가지 않게 한다. 리다이렉트는 예상 밖 응답이라 재시도 대상이다.
     server.status = 302
-    server.headers = {"Location": f"http://127.0.0.1:{server.server_address[1]}/elsewhere"}
+    server.headers = {
+        "Location": f"http://127.0.0.1:{server.server_address[1]}/elsewhere"
+    }
     assert register(registrar(server)) == RegisterResult.RETRY
     assert len(server.received) == 1
 

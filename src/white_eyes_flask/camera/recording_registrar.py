@@ -1,5 +1,6 @@
 """FNC-S-010 녹화 등록 (POST /internal/v1/recordings)"""
 
+import http.client
 import json
 import logging
 import threading
@@ -19,6 +20,12 @@ _AUTH_FAILURES = {401, 403}
 _LOG_EVERY = 30
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        # 따라가지 않는다. 토큰이 다른 주소로 가지 않게 한다(3xx는 재시도).
+        return None
+
+
 class RegisterResult(StrEnum):
     OK = "OK"
     RETRY = "RETRY"  # 400 외의 실패(401·404·5xx·연결 실패 등): 고치면 성공할 수 있음
@@ -35,6 +42,7 @@ class RecordingRegistrar:
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        self._opener = urllib.request.build_opener(_NoRedirect)
         # 한 인스턴스를 여러 캠 스레드가 같이 쓴다
         self._lock = threading.Lock()
         self._failures = 0
@@ -57,7 +65,7 @@ class RecordingRegistrar:
             headers={"Content-Type": "application/json", TOKEN_HEADER: self._token},
         )
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout):
+            with self._opener.open(request, timeout=self._timeout):
                 self._recovered()
                 return RegisterResult.OK
         except urllib.error.HTTPError as error:
@@ -76,7 +84,8 @@ class RecordingRegistrar:
                 "녹화 등록 실패 cameraId=%s status=%s%s", camera_id, error.code, hint
             )
             return RegisterResult.RETRY
-        except (OSError, ValueError) as error:  # URLError·타임아웃 포함
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            # URLError·타임아웃, 응답 형식이 깨진 경우(BadStatusLine 등) 포함
             # 토큰은 로그에 남기지 않는다
             self._warn("녹화 등록 실패 cameraId=%s: %s", camera_id, error)
             return RegisterResult.RETRY

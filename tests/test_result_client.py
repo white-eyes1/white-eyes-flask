@@ -1,3 +1,5 @@
+"""FNC-S-006 결과 전송 클라이언트 (ResultClient)"""
+
 import json
 import logging
 import socket

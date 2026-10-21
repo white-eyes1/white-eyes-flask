@@ -1,3 +1,5 @@
+"""FNC-S-006 전송기를 앱에 연결 (create_app)"""
+
 import pytest
 
 from white_eyes_flask import app as app_module

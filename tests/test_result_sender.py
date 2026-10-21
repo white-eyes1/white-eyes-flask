@@ -1,3 +1,5 @@
+"""FNC-S-006 1초 결과 전송·재전송 (ResultSender)"""
+
 import logging
 import threading
 import time

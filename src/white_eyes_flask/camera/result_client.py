@@ -1,3 +1,5 @@
+"""FNC-S-006 1초 결과 묶음 전송 (POST /internal/v1/results)"""
+
 import http.client
 import json
 import logging

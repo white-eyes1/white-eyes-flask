@@ -35,7 +35,5 @@ class Config:
                 "ADMIN_INTERNAL_BASE_URL", "http://localhost:8082"
             ),
             detector=os.environ.get("DETECTOR", "visdrone"),
-            detect_dedupe_overlap=float(
-                os.environ.get("DETECT_DEDUPE_OVERLAP", "0")
-            ),
+            detect_dedupe_overlap=float(os.environ.get("DETECT_DEDUPE_OVERLAP", "0")),
         )

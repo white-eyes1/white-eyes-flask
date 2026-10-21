@@ -1,3 +1,5 @@
+"""FNC-S-003 중심점 거리로 같은 사람을 잇는 추적기"""
+
 from dataclasses import dataclass
 
 import numpy as np

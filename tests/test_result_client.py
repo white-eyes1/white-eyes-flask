@@ -77,17 +77,18 @@ def test_success_statuses(server, status):
     assert client(server).send(ITEMS) == SendResult.OK
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
-def test_client_errors_reject_the_batch(server, caplog, status):
-    server.status = status
+def test_bad_request_rejects_the_batch(server, caplog):
+    server.status = 400
     assert client(server).send(ITEMS) == SendResult.REJECTED
-    assert str(status) in caplog.text
+    assert "400" in caplog.text
 
 
-@pytest.mark.parametrize("status", [408, 429])
-def test_timeout_and_rate_limit_are_worth_retrying(server, status):
+@pytest.mark.parametrize("status", [401, 403, 404, 408, 413, 422, 429])
+def test_every_other_client_error_is_worth_retrying(server, caplog, status):
+    """400만 묶음을 버린다. 토큰 설정 실수(401·403)는 고친 뒤 보관분을 살릴 수 있어야 한다."""
     server.status = status
     assert client(server).send(ITEMS) == SendResult.RETRY
+    assert TOKEN not in caplog.text
 
 
 @pytest.mark.parametrize("status", [500, 502, 503])

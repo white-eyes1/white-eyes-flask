@@ -1,6 +1,7 @@
 """FNC-S-010 녹화 등록 (RecordingRegistrar)"""
 
 import json
+import logging
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -82,11 +83,41 @@ def test_posts_the_recording_without_ended_at(server):
     assert "endedAt" not in server.received[0]["body"]
 
 
-@pytest.mark.parametrize("status", [400, 401, 404])
-def test_client_errors_are_rejected_not_retried(server, caplog, status):
-    server.status = status
+def test_bad_request_is_rejected_not_retried(server, caplog):
+    server.status = 400
     assert register(registrar(server)) == RegisterResult.REJECTED
+    assert "400" in caplog.text
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 408, 413, 422, 429])
+def test_every_other_client_error_is_worth_retrying(server, caplog, status):
+    """400만 거절한다. 토큰·주소 설정 실수는 고친 뒤 등록할 수 있어야 한다(결과 전송과 같은 규칙)."""
+    server.status = status
+    assert register(registrar(server)) == RegisterResult.RETRY
     assert str(status) in caplog.text
+    assert TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_token_failures_tell_to_check_the_token_setting(server, caplog, status):
+    server.status = status
+    register(registrar(server))
+    assert "토큰 설정을 확인하세요" in caplog.text
+
+
+def test_repeated_failures_are_logged_only_now_and_then_and_recovery_once(
+    server, caplog
+):
+    reg = registrar(server)
+    server.status = 503
+    with caplog.at_level(logging.INFO):
+        for _ in range(61):
+            assert register(reg) == RegisterResult.RETRY
+        failures = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(failures) == 3  # 1번째, 30번째, 60번째
+        server.status = 201
+        assert register(reg) == RegisterResult.OK
+        assert "복구" in caplog.records[-1].getMessage()
 
 
 @pytest.mark.parametrize("status", [500, 502, 503])

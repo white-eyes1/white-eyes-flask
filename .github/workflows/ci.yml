@@ -2,6 +2,10 @@ name: ci
 on:
   pull_request:
     branches: [dev, main]
+  # dev·main에 머지된 결과도 검사한다(PR CI는 올린 시점의 dev 기준이라 합친 결과를 검증하지 않음)
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest

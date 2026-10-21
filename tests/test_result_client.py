@@ -71,6 +71,13 @@ def test_posts_the_batch_as_a_json_array_with_the_token(server):
     ]
 
 
+@pytest.mark.parametrize("suffix", ["/admin", "/admin/"])
+def test_admin_context_path_in_the_base_url_reaches_the_internal_api(server, suffix):
+    base_url = f"http://127.0.0.1:{server.server_address[1]}{suffix}"
+    assert ResultClient(base_url, TOKEN).send(ITEMS) == SendResult.OK
+    assert [r["path"] for r in server.received] == ["/admin/internal/v1/results"]
+
+
 @pytest.mark.parametrize("status", [200, 201, 204])
 def test_success_statuses(server, status):
     server.status = status

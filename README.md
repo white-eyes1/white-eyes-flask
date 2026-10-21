@@ -50,7 +50,7 @@ sha256sum weights/visdrone-yolov8m.pt   # Windows PowerShell: (Get-FileHash weig
 # SHA-256: C1A19706FE83E8282795FB6C6CEC6A5E2A6E515C9B5FE4F558863D987EE24F8B (52,006,688바이트)
 ```
 
-`.env`에는 `YOLO_WEIGHTS=./weights/visdrone-yolov8m.pt`처럼 적는다. 입력 크기는 `DETECT_IMGSZ`(기본 960), 같은 사람을 둘로 센 박스를 합치는 기준은 `DETECT_DEDUPE_OVERLAP`(기본 0.25, 0이면 합치지 않음)이다.
+`.env`에는 `YOLO_WEIGHTS=./weights/visdrone-yolov8m.pt`처럼 적는다. 입력 크기는 `DETECT_IMGSZ`(기본 960), 같은 사람을 둘로 센 박스를 합치는 기준은 `DETECT_DEDUPE_OVERLAP`(기본 0=합치지 않음, 켜려면 0.25 정도)이다.
 
 ### 이전: YOLO-CROWD (`DETECTOR=yolo-crowd`)
 

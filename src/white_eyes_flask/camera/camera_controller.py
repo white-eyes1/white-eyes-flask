@@ -2,6 +2,7 @@ from flask import Blueprint, Response, current_app, request
 
 from white_eyes_flask.camera.camera_service import (
     CameraService,
+    CameraStoppingError,
     SourceNotFoundError,
     SourceTypeNotSupportedError,
 )
@@ -36,6 +37,12 @@ def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
     except SourceTypeNotSupportedError:
         return error_response(
             "SOURCE_TYPE_NOT_SUPPORTED", "아직 지원하지 않는 영상 종류입니다.", 501
+        )
+    except CameraStoppingError:
+        return error_response(
+            "CAMERA_STOPPING",
+            "정지가 아직 끝나지 않았습니다. 잠시 뒤 다시 시작해 주세요.",
+            409,
         )
     return {"cameraId": camera_id, "status": status}
 

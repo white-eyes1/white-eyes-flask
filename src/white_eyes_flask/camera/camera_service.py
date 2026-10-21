@@ -20,6 +20,10 @@ class SourceTypeNotSupportedError(Exception):
     """1단계에서 구현하지 않은 sourceType(LIVE)."""
 
 
+class CameraStoppingError(Exception):
+    """정지가 10초 안에 끝나지 않아 옛 작업 스레드가 아직 살아 있음."""
+
+
 class CameraService:
     def __init__(
         self,
@@ -30,10 +34,12 @@ class CameraService:
         self._media_root = Path(media_root)
         self._preparer = preparer or NullPreparer()
         self._player = player or NullPlayer()
-        # _lock은 아래 두 딕셔너리를 읽고 쓰는 짧은 순간에만 쓴다.
+        # _lock은 아래 세 딕셔너리를 읽고 쓰는 짧은 순간에만 쓴다.
         # 같은 캠의 시작·정지는 캠별 잠금(_camera_lock)으로 줄 세운다.
         self._lock = threading.Lock()
         self._jobs: dict[int, CameraJob] = {}
+        # 정지가 10초 안에 끝나지 않은 작업. 스레드가 끝날 때까지 같은 캠은 새로 시작하지 않는다.
+        self._stopping: dict[int, CameraJob] = {}
         self._camera_locks: dict[int, threading.Lock] = {}
 
     def start(self, camera_id: int, source_type: str, source_uri: str) -> CameraStatus:
@@ -43,6 +49,10 @@ class CameraService:
             running = self._get_job(camera_id)
             if running is not None and running.is_alive():
                 return running.status
+
+            # 같은 캠에 옛 스레드가 남아 있으면 새 스레드를 만들지 않는다(스레드 겹침 방지).
+            if self._has_lingering_job(camera_id):
+                raise CameraStoppingError(camera_id)
 
             if source_type == "LIVE":
                 # LIVE 분기(FNC-S-007)는 2단계
@@ -68,7 +78,8 @@ class CameraService:
         # 끝나기 전에 들어와 스레드가 둘이 되는 것을 막는다. 다른 캠은 막히지 않는다.
         with self._camera_lock(camera_id):
             with self._lock:
-                job = self._jobs.pop(camera_id, None)
+                # 옛 작업이 아직 남아 있으면 정지를 다시 요청해 그 종료를 한 번 더 기다린다.
+                job = self._jobs.pop(camera_id, None) or self._stopping.get(camera_id)
             if job is None:
                 return
 
@@ -76,11 +87,17 @@ class CameraService:
             # 준비 취소(FNC-S-009)는 정지 플래그로 준비 루프가 스스로 멈추고 임시 파일을 지운다.
             # 전송 대기 중인 결과는 건드리지 않는다(전송 작업이 보냄).
             stopped = job.stop(STOP_WAIT_SEC)
+            with self._lock:
+                if stopped:
+                    self._stopping.pop(camera_id, None)
+                else:
+                    self._stopping[camera_id] = job
 
         if stopped:
             logger.info("캠 정지 cameraId=%s", camera_id)
         else:
-            # 10초 안에 안 끝나도 응답은 200. 이 스레드는 정지 플래그가 선 채 스스로 끝난다.
+            # 10초 안에 안 끝나도 응답은 200. 이 스레드는 정지 플래그가 선 채 스스로 끝나고,
+            # 그때까지 같은 캠의 새 시작은 CameraStoppingError로 막는다.
             logger.warning(
                 "캠 정지 지연 cameraId=%s, %s초 안에 끝나지 않음",
                 camera_id,
@@ -95,16 +112,27 @@ class CameraService:
         with self._lock:
             return self._jobs.get(camera_id)
 
+    def _has_lingering_job(self, camera_id: int) -> bool:
+        """정지가 끝나지 않은 옛 스레드가 아직 살아 있나. 끝났으면 기록을 지운다."""
+        with self._lock:
+            job = self._stopping.get(camera_id)
+            if job is None:
+                return False
+            if job.is_alive():
+                return True
+            del self._stopping[camera_id]
+            return False
+
     def job_count(self) -> int:
         with self._lock:
             return sum(1 for job in self._jobs.values() if job.is_alive())
 
     def shutdown(self) -> None:
+        """모든 캠을 stop()으로 멈춘다. 진행 중인 정지와 남은 옛 스레드도 캠별 잠금으로 기다린다."""
         with self._lock:
-            jobs = list(self._jobs.values())
-            self._jobs.clear()
-        for job in jobs:
-            job.stop()
+            camera_ids = list(self._camera_locks)
+        for camera_id in camera_ids:
+            self.stop(camera_id)
 
     def _check_dummy_source(self, source_uri: str) -> None:
         if (

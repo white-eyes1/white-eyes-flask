@@ -1,3 +1,5 @@
+"""FNC-S-005 체류 시간 계산 (EdgeCounter)"""
+
 import pytest
 
 from white_eyes_flask.analysis.edge_counter import EdgeCounter

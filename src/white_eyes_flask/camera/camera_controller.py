@@ -1,3 +1,5 @@
+"""FNC-S-001·002 캠 시작·정지 API (/analyzer/v1/cameras)"""
+
 from flask import Blueprint, Response, current_app, request
 
 from white_eyes_flask.camera.camera_service import (

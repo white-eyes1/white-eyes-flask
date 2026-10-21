@@ -1,3 +1,5 @@
+"""FNC-S-009 더미 영상 분석 (analyze_video)"""
+
 import gzip
 import json
 import threading

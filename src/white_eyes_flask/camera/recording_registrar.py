@@ -1,3 +1,5 @@
+"""FNC-S-010 녹화 등록 (POST /internal/v1/recordings)"""
+
 import json
 import logging
 import urllib.error

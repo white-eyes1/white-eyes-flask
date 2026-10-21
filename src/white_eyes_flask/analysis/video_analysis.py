@@ -1,3 +1,5 @@
+"""FNC-S-009 더미 영상 분석: 영상을 끝까지 분석해 초별 결과를 만든다"""
+
 import math
 import threading
 from dataclasses import dataclass

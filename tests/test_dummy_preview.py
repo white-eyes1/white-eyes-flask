@@ -18,6 +18,7 @@ from white_eyes_flask.analysis.result import TrackedBox
 from white_eyes_flask.camera.dummy_player import DummyPlayer, _Repetition
 from white_eyes_flask.camera.dummy_preview import (
     FAILURE_COOLDOWN_SEC,
+    IDLE_CLOSE_SEC,
     MAX_FORWARD_SKIP,
     BoxTimeline,
     DummyPreview,
@@ -814,3 +815,40 @@ def test_resting_after_repeated_failures_is_logged(tmp_path, caplog):
         for _ in range(3):
             preview.step()
     assert any("초 쉼" in record.message for record in caplog.records)
+
+
+def test_the_default_idle_close_time_is_ten_seconds():
+    assert IDLE_CLOSE_SEC == 10.0
+
+
+def test_a_video_that_was_never_opened_is_not_opened_while_nobody_watches(tmp_path):
+    opened = []
+
+    def opener(path):
+        opened.append(path)
+        return FakeCapture()
+
+    stream = StreamService().open(7)
+    preview = DummyPreview(
+        stream,
+        Path("clip.mp4"),
+        tmp_path / "none.json.gz",
+        seconds_for([1]),
+        FixedPosition(0.5),
+        fps=100,
+        stop=threading.Event(),
+        opener=opener,
+        idle_close_sec=0.1,
+    )
+    run_preview(preview)  # 요청도 시청자도 없다
+    try:
+        time.sleep(0.6)  # 안 열린 채로 닫을 시간이 지난다
+        assert opened == []  # 한 번도 열지 않았다
+    finally:
+        preview.shutdown()
+
+
+def test_closing_a_video_that_is_not_open_is_harmless():
+    frames = frames_with(FakeCapture())
+    frames.close()  # 열린 적 없어도 오류가 나지 않는다
+    frames.close()  # 두 번 닫아도 마찬가지

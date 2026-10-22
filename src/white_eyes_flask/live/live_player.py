@@ -23,6 +23,7 @@ from white_eyes_flask.camera.result_queue import ResultSink
 from white_eyes_flask.camera.status_reporter import ReportResult
 from white_eyes_flask.live.live_analyzer import LiveAnalyzer
 from white_eyes_flask.live.live_source import mask_uri, open_capture
+from white_eyes_flask.recording.gap_recorder import GapSplittingRecorder
 from white_eyes_flask.recording.recorder import (
     LiveRecorder,
     RecorderFailed,
@@ -107,7 +108,7 @@ class LivePlayer:
         sink: ResultSink,
         reporter: Any,
         streams: StreamService,
-        recorder: LiveRecorder | None,
+        recorder: LiveRecorder | GapSplittingRecorder | None,
         *,
         fps: int,
         conf_thres: float,

@@ -231,8 +231,13 @@ def test_the_live_factory_passes_the_config_fail_time_to_each_player():
     factory = build_live_factory(
         config, MagicMock(), ResultQueue(), StreamService(), MagicMock()
     )
-    player, _ = factory.create(3)
+    player, recorder = factory.create(3)
     assert player._reconnect_fail_sec == 7
+    # 녹화기는 끊김 뒤 파일을 새로 시작하는 래퍼다(CameraJob도 이것을 닫는다)
+    from white_eyes_flask.recording.gap_recorder import GapSplittingRecorder
+
+    assert isinstance(recorder, GapSplittingRecorder)
+    assert player._recorder is recorder
 
 
 def test_no_error_is_reported_for_a_short_outage():

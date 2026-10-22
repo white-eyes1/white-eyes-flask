@@ -365,7 +365,8 @@ class LiveRecorder:
         # 첫 파일은 가동 시각이 속한 분, 그 뒤 파일은 ffmpeg가 끊은 시각에서 가장 가까운 분이 이름이다
         name_ms = started_ms if index == 0 else nearest_minute_ms(started_ms)
         stem = file_stem(self.camera_id, name_ms)
-        box_path = self._tmp_dir / f"{stem}_{index:05d}.json.gz"
+        # 같은 분에 끊겼다 복구돼 녹화기가 새로 만들어져도 임시 파일이 겹치지 않게 첫 프레임 시각을 넣는다
+        box_path = self._tmp_dir / f"{stem}_{self._first_ms}_{index:05d}.json.gz"
         frames = [((at - started_ms) / 1000, boxes) for at, boxes in inside]
         try:
             write_box_file(box_path, self._settings.analyze_fps, frames)

@@ -8,13 +8,16 @@ from white_eyes_flask.camera.result_queue import ResultSink
 from white_eyes_flask.live.live_player import LivePlayer
 from white_eyes_flask.live.live_source import open_capture
 from white_eyes_flask.recording.ffmpeg import RecorderSettings
+from white_eyes_flask.recording.gap_recorder import GapSplittingRecorder
 from white_eyes_flask.recording.publisher import RecordingPublisher
 from white_eyes_flask.recording.recorder import LiveRecorder
 from white_eyes_flask.stream.stream_service import StreamService
 
 
 class LiveWorkFactory(Protocol):
-    def create(self, camera_id: int) -> tuple[LivePlayer, LiveRecorder | None]: ...
+    def create(
+        self, camera_id: int
+    ) -> tuple[LivePlayer, GapSplittingRecorder | None]: ...
 
 
 class LiveFactory:
@@ -47,8 +50,12 @@ class LiveFactory:
         self._edge_margin = edge_margin
         self._capture_factory = capture_factory
 
-    def create(self, camera_id: int) -> tuple[LivePlayer, LiveRecorder | None]:
-        recorder = LiveRecorder(camera_id, self._record_settings, self._publisher)
+    def create(self, camera_id: int) -> tuple[LivePlayer, GapSplittingRecorder | None]:
+        # 스트림이 끊겼다 복구되면 녹화 파일을 새로 시작한다(LiveRecorder는 파일 하나의 ffmpeg 수명이다)
+        recorder = GapSplittingRecorder(
+            camera_id,
+            lambda: LiveRecorder(camera_id, self._record_settings, self._publisher),
+        )
         player = LivePlayer(
             self._detector_provider,
             self._sink,

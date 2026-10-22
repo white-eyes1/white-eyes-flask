@@ -71,12 +71,21 @@ class FakeProc:
         pattern = self.command[-1]
         return Path(pattern.replace("%05d", f"{index:05d}"))
 
-    def finish(self, index: int, partial_line: bool = False) -> None:
-        """index번째 파일을 닫고 list에 올린다."""
+    def finish(
+        self,
+        index: int,
+        start: float | None = None,
+        end: float | None = None,
+        partial_line: bool = False,
+    ) -> None:
+        """index번째 파일을 닫고 list에 올린다. start·end는 첫 프레임부터의 초(실제 ffmpeg처럼).
+
+        시각을 주지 않으면 파일 이름만 적는다(시각을 못 읽을 때의 분 경계 가정 경로를 시험한다).
+        """
         path = self.segment(index)
         path.write_bytes(b"mp4-%d" % index)
         listing = Path(self.command[self.command.index("-segment_list") + 1])
-        line = f"{path.name},0.000,1.000"
+        line = path.name if start is None else f"{path.name},{start:.6f},{end:.6f}"
         with open(listing, "a", encoding="utf-8") as stream:
             stream.write(line if partial_line else line + "\n")
 
@@ -165,7 +174,7 @@ def test_a_short_recording_becomes_one_file_that_ends_at_the_last_frame(harness)
     (item,) = harness.publisher.items
     assert item.camera_id == 7
     assert item.started_ms == int(at(14, 3, 27) * 1000)
-    assert item.ended_ms == int(at(14, 3, 50) * 1000)
+    assert item.ended_ms == int(at(14, 3, 50) * 1000) + 100  # 마지막 프레임 길이만큼
     body = read_boxes(item.boxes)
     assert body["fps"] == 5
     assert [f["t"] for f in body["frames"]] == [3.0, 23.0]
@@ -201,7 +210,7 @@ def test_second_file_starts_on_the_minute_and_keeps_its_own_boxes(harness):
     rec.close()
     first, second = harness.publisher.items
     assert second.started_ms == int(at(14, 4) * 1000)
-    assert second.ended_ms == int(at(14, 4, 20) * 1000)
+    assert second.ended_ms == int(at(14, 4, 20) * 1000) + 100
     frames = read_boxes(second.boxes)["frames"]
     assert [f["t"] for f in frames] == [5.0, 20.0]
     assert [f["b"][0][0] for f in frames] == [2, 3]
@@ -223,7 +232,7 @@ def test_a_full_minute_file_ends_on_the_minute_boundary(harness):
 def test_a_half_written_list_line_is_read_on_the_next_poll(harness):
     rec = harness.recorder
     rec.write_frame(FRAME, at(14, 3, 10))
-    harness.proc.finish(0, partial_line=True)
+    harness.proc.finish(0, 0.0, 1.0, partial_line=True)
     rec.poll_segments()
     assert harness.publisher.items == []
     listing = Path(
@@ -569,3 +578,58 @@ def test_files_that_never_closed_are_not_published_and_are_reported(harness, cap
         rec.close()
     assert harness.publisher.items == []
     assert any("닫히지 못한 녹화 파일" in record.message for record in caplog.records)
+
+
+def test_file_times_come_from_the_segment_list_not_from_minute_boundaries(harness):
+    # 실제 ffmpeg 관측: 분 경계 0.15초 전에 시작하면 경계에서 안 끊기고 파일이 하나로 이어진다
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 59.85))
+    rec.add_boxes(at(14, 3, 59.9), [box(1)])
+    rec.write_frame(FRAME, at(14, 4, 1.0))
+    rec.add_boxes(at(14, 4, 1.0), [box(2)])  # 경계 뒤의 박스도 이 파일 몫이다
+    rec.write_frame(FRAME, at(14, 4, 3.8))
+    rec.add_boxes(at(14, 4, 3.8), [box(3)])
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(0, 0.0, 4.2)
+    rec.close()
+    (item,) = harness.publisher.items
+    assert item.started_ms == int(at(14, 3, 59.85) * 1000)
+    assert item.ended_ms == int(at(14, 4, 3.8) * 1000) + 100
+    frames = read_boxes(item.boxes)["frames"]
+    assert [f["b"][0][0] for f in frames] == [1, 2, 3]
+    assert [f["t"] for f in frames] == [0.05, 1.15, 3.95]
+
+
+def test_a_file_cut_before_the_boundary_is_split_where_ffmpeg_cut_it(harness):
+    # 실제 ffmpeg 관측: 첫 파일이 분 경계보다 0.8초 일찍 끊겼다
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 57))
+    rec.add_boxes(at(14, 3, 58), [box(1)])  # 첫 파일 구간(57.0~59.2)
+    rec.add_boxes(at(14, 3, 59.5), [box(2)])  # 둘째 파일 구간(59.2~)
+    rec.write_frame(FRAME, at(14, 4, 5))
+    rec.add_boxes(at(14, 4, 5), [box(3)])
+    harness.proc.finish(0, 0.0, 2.2)
+    rec.poll_segments()
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(1, 2.2, 8.3)
+    rec.close()
+    first, second = harness.publisher.items
+    assert first.ended_ms == second.started_ms == int(at(14, 3, 59.2) * 1000)
+    assert [f["b"][0][0] for f in read_boxes(first.boxes)["frames"]] == [1]
+    frames = read_boxes(second.boxes)["frames"]
+    assert [f["b"][0][0] for f in frames] == [2, 3]
+    assert frames[0]["t"] == 0.3
+    # 이름은 ffmpeg가 끊은 시각에서 가장 가까운 분이다(둘째 파일이 14:04)
+    assert "cam7_20261012_1403_" in first.boxes.name
+    assert "cam7_20261012_1404_" in second.boxes.name
+
+
+def test_unreadable_times_in_the_segment_list_fall_back_to_minute_boundaries(harness):
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    rec.add_boxes(at(14, 3, 55), [box(1)])
+    rec.write_frame(FRAME, at(14, 4, 5))
+    harness.proc.finish(0, 5.0, 1.0)  # 끝이 시작보다 앞서 믿을 수 없다
+    rec.poll_segments()
+    (first,) = harness.publisher.items
+    assert first.ended_ms == int(at(14, 4) * 1000)
+    assert len(read_boxes(first.boxes)["frames"]) == 1
+    rec.close()

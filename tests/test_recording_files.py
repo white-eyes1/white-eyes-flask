@@ -9,7 +9,12 @@ from white_eyes_flask.analysis.result import TrackedBox
 from white_eyes_flask.camera.kst import KST
 from white_eyes_flask.recording.box_file import write_box_file
 from white_eyes_flask.recording.ffmpeg import RecorderSettings, build_command
-from white_eyes_flask.recording.naming import file_stem, minute_start_ms, relative_dir
+from white_eyes_flask.recording.naming import (
+    file_stem,
+    minute_start_ms,
+    nearest_minute_ms,
+    relative_dir,
+)
 
 
 def ms(hour, minute, second=0, milli=0) -> int:
@@ -30,6 +35,12 @@ def test_file_name_date_follows_kst_not_utc():
 
 def test_minute_start_drops_seconds_and_millis():
     assert minute_start_ms(ms(14, 3, 59, 999)) == ms(14, 3)
+
+
+def test_nearest_minute_rounds_to_the_closest_boundary():
+    assert nearest_minute_ms(ms(14, 3, 59, 200)) == ms(14, 4)  # 경계 0.8초 전
+    assert nearest_minute_ms(ms(14, 4, 0, 400)) == ms(14, 4)  # 경계 0.4초 뒤
+    assert nearest_minute_ms(ms(14, 3, 20)) == ms(14, 3)
 
 
 def test_box_file_follows_the_coordinate_file_format(tmp_path: Path):

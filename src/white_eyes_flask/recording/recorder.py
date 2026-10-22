@@ -27,7 +27,12 @@ from white_eyes_flask.recording.ffmpeg import (
     segment_list_path,
     segment_pattern,
 )
-from white_eyes_flask.recording.naming import MINUTE_MS, file_stem, minute_start_ms
+from white_eyes_flask.recording.naming import (
+    MINUTE_MS,
+    file_stem,
+    minute_start_ms,
+    nearest_minute_ms,
+)
 from white_eyes_flask.recording.publisher import FinishedRecording, RecordingPublisher
 
 logger = logging.getLogger(__name__)
@@ -84,8 +89,8 @@ class LiveRecorder:
         self._list_path: Path | None = None
         self._pattern: Path | None = None
         self._list_offset = 0
-        # 닫혔다고 목록에 오른 파일 순번 → (이름, 본 시각). 박스가 모이면 게시기로 넘긴다
-        self._waiting: dict[int, tuple[str, float]] = {}
+        # 닫혔다고 목록에 오른 파일 순번 → (이름, 본 시각, 목록의 시작·끝 초). 박스가 모이면 게시기로 넘긴다
+        self._waiting: dict[int, tuple[str, float, float | None, float | None]] = {}
         # 이미 게시기에 넘긴 파일 순번. segment list가 처음부터 다시 쓰여도 두 번 넘기지 않는다
         self._finished: set[int] = set()
         self._collect_lock = threading.Lock()
@@ -302,41 +307,54 @@ class LiveRecorder:
                 continue
             index = int(match.group(1))
             if index not in self._finished and index not in self._waiting:
-                self._waiting[index] = (name, self._clock())
+                start_s, end_s = _times(row)
+                self._waiting[index] = (name, self._clock(), start_s, end_s)
 
     def _flush_waiting(self) -> None:
         """닫힌 파일을 순서대로 넘긴다. 분석이 그 분의 박스를 다 넘기지 않았으면 조금 기다린다."""
         for index in sorted(self._waiting):
-            name, seen_at = self._waiting[index]
-            if not self._ready(index, seen_at):
+            name, seen_at, start_s, end_s = self._waiting[index]
+            _, end_ms = self._window(index, start_s, end_s)
+            if not self._ready(end_ms, seen_at):
                 return  # 뒤 파일은 앞 파일 다음에 넘긴다
             del self._waiting[index]
-            self._finish_segment(index, name)
+            self._finish_segment(index, name, start_s, end_s)
 
-    def _ready(self, index: int, seen_at: float) -> bool:
+    def _ready(self, end_ms: int, seen_at: float) -> bool:
         if self._closing.is_set():
             return True
-        _, boundary_ms = self._bounds(index)
-        if self._box_watermark_ms >= boundary_ms:
-            return True  # 분석이 이 분 끝을 지났으니 박스가 다 왔다
+        if self._box_watermark_ms >= end_ms:
+            return True  # 분석이 이 파일의 끝을 지났으니 박스가 다 왔다
         return self._clock() - seen_at >= self._box_grace_sec
 
-    def _finish_segment(self, index: int, name: str) -> None:
+    def _finish_segment(
+        self, index: int, name: str, start_s: float | None, end_s: float | None
+    ) -> None:
         video = self._tmp_dir / Path(name).name
-        started_ms, boundary_ms = self._bounds(index)
+        started_ms, window_end_ms = self._window(index, start_s, end_s)
+        # 정지로 닫힌 마지막 파일이면 그 뒤의 박스도 모두 이 파일 몫이다
+        is_last = self._closing.is_set() and not any(i > index for i in self._waiting)
         with self._box_lock:
             # 이 파일의 시간대 박스만 쓴다. 시작보다 이른 박스는 앞 파일이 이미 나간 뒤 늦게
             # 도착한 것이라 버리고, 끝보다 늦은 박스는 다음 파일 몫으로 남긴다.
-            inside = [i for i in self._boxes if started_ms <= i[0] < boundary_ms]
-            self._boxes = [i for i in self._boxes if i[0] >= boundary_ms]
-        # 녹화 중에 닫힌 파일은 분이 다 찬 것이다. 정지로 닫힌 마지막 파일은 마지막 프레임에서 끝난다.
-        if not self._closing.is_set() or self._last_ms >= boundary_ms:
-            ended_ms = boundary_ms
-        else:
-            ended_ms = max(self._last_ms, started_ms)
+            inside = [
+                i
+                for i in self._boxes
+                if i[0] >= started_ms and (is_last or i[0] < window_end_ms)
+            ]
+            self._boxes = (
+                [] if is_last else [i for i in self._boxes if i[0] >= window_end_ms]
+            )
+        ended_ms = window_end_ms
+        if self._closing.is_set():
+            # 목록의 끝 시각은 마지막 프레임의 길이와 마무리만큼 더 길다
+            frame_ms = 1000 // max(1, self._settings.fps)
+            ended_ms = min(ended_ms, self._last_ms + frame_ms)
         # 관리자 앱은 endedAt이 startedAt보다 늦어야 받는다(프레임이 한 장뿐인 파일 대비)
         ended_ms = max(ended_ms, started_ms + 1)
-        stem = file_stem(self.camera_id, started_ms)
+        # 첫 파일은 가동 시각이 속한 분, 그 뒤 파일은 ffmpeg가 끊은 시각에서 가장 가까운 분이 이름이다
+        name_ms = started_ms if index == 0 else nearest_minute_ms(started_ms)
+        stem = file_stem(self.camera_id, name_ms)
         box_path = self._tmp_dir / f"{stem}_{index:05d}.json.gz"
         frames = [((at - started_ms) / 1000, boxes) for at, boxes in inside]
         try:
@@ -352,8 +370,25 @@ class LiveRecorder:
         self._finished.add(index)
         logger.info("녹화 파일 완성 cameraId=%s file=%s", self.camera_id, video.name)
 
+    def _window(
+        self, index: int, start_s: float | None, end_s: float | None
+    ) -> tuple[int, int]:
+        """파일이 담은 구간(시작, 끝) 밀리초.
+
+        ffmpeg가 목록에 적은 시작·끝 시각(첫 프레임부터의 초)으로 계산한다. ffmpeg는 분 경계가 아니라
+        자기가 시작한 시점을 기준으로 첫 파일을 끊기 때문에(실제 ffmpeg로 확인) 분 경계를 가정하면
+        어긋난다. 목록에서 시각을 읽지 못한 경우에만 분 경계를 가정한다.
+        """
+        assert self._first_ms is not None
+        if start_s is not None and end_s is not None:
+            return (
+                self._first_ms + round(start_s * 1000),
+                self._first_ms + round(end_s * 1000),
+            )
+        return self._bounds(index)
+
     def _bounds(self, index: int) -> tuple[int, int]:
-        """index번째 파일의 (시작, 끝 분 경계) 밀리초. 첫 파일은 가동 시각에서 시작한다."""
+        """index번째 파일의 (시작, 끝 분 경계) 밀리초. 목록에 시각이 없을 때만 쓰는 가정이다."""
         assert self._first_ms is not None
         first_minute = minute_start_ms(self._first_ms)
         started = self._first_ms if index == 0 else first_minute + index * MINUTE_MS
@@ -419,3 +454,14 @@ class LiveRecorder:
             code,
             self._error_tail(),
         )
+
+
+def _times(row: list[str]) -> tuple[float | None, float | None]:
+    """segment list 한 줄(파일,시작,끝)의 시작·끝 초. 읽을 수 없으면 (None, None)."""
+    try:
+        start_s, end_s = float(row[1]), float(row[2])
+    except (IndexError, ValueError):
+        return None, None
+    if not (0 <= start_s < end_s):  # 음수·역전·NaN은 믿지 않는다
+        return None, None
+    return start_s, end_s

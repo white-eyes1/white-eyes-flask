@@ -13,6 +13,11 @@ def minute_start_ms(epoch_ms: int) -> int:
     return epoch_ms - epoch_ms % MINUTE_MS
 
 
+def nearest_minute_ms(epoch_ms: int) -> int:
+    """가장 가까운 분 경계(밀리초). 분 경계 근처에서 끊긴 파일의 이름 시각을 정할 때 쓴다."""
+    return (epoch_ms + MINUTE_MS // 2) // MINUTE_MS * MINUTE_MS
+
+
 def _moment(epoch_ms: int) -> datetime:
     return datetime.fromtimestamp(epoch_ms // 1000, KST)
 

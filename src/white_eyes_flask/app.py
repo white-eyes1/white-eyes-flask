@@ -22,6 +22,8 @@ from white_eyes_flask.logging_setup import (
     accept_request_id,
     configure_logging,
 )
+from white_eyes_flask.stream.stream_controller import stream_bp
+from white_eyes_flask.stream.stream_service import StreamService
 
 TOKEN_HEADER = "X-Internal-Token"
 REQUEST_ID_HEADER = "X-Request-Id"
@@ -88,12 +90,17 @@ def create_app(
     # 1초 결과 전송 큐. 재생기가 넣고 전송기(FNC-S-006)가 비운다.
     result_queue = ResultQueue()
     app.extensions["result_queue"] = result_queue
+    # 실시간 화면·미리보기용 최신 프레임. 캠 작업이 열고 닫고, 분석 쪽이 프레임을 넣는다.
+    stream_service = StreamService()
+    app.extensions["stream_service"] = stream_service
     app.extensions["camera_service"] = CameraService(
         config.media_root,
         preparer or build_preparer(config, cache),
         player or build_player(config, cache, result_queue),
+        stream_service,
     )
     app.register_blueprint(camera_bp)
+    app.register_blueprint(stream_bp)
     # 실제 재생기를 쓸 때만 전송기를 만든다(가짜 재생기는 큐를 쓰지 않아 보낼 것이 없다).
     if result_sender is None and player is None:
         result_sender = build_result_sender(config, result_queue)

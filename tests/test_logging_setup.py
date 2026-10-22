@@ -269,6 +269,31 @@ def test_the_detector_provider_quiets_libraries_after_loading_the_model(tmp_path
     assert library.handlers == [] and library.propagate is True
 
 
+def test_a_logging_setup_failure_is_not_reported_as_a_model_load_failure(
+    tmp_path, monkeypatch
+):
+    from white_eyes_flask.analysis import detector_provider
+    from white_eyes_flask.analysis.detector_provider import (
+        DetectorUnavailableError,
+        LazyDetectorProvider,
+    )
+
+    def broken():
+        raise RuntimeError("logging broke")
+
+    monkeypatch.setattr(detector_provider, "quiet_library_loggers", broken)
+    weights = tmp_path / "w.pt"
+    weights.write_bytes(b"x")
+    provider = LazyDetectorProvider(str(weights), 640, 0.3)
+    model = object()
+    provider._load = lambda path: model
+    with pytest.raises(RuntimeError, match="logging broke"):
+        provider()
+    assert not issubclass(RuntimeError, DetectorUnavailableError)
+    monkeypatch.setattr(detector_provider, "quiet_library_loggers", lambda: None)
+    assert provider() is model  # 모델은 이미 불러왔으니 다시 불러오지 않는다
+
+
 def test_app_package_follows_log_level_including_sub_loggers(capsys):
     configure_logging("DEBUG")
     logging.getLogger("white_eyes_flask.camera.camera_service").debug("app debug")

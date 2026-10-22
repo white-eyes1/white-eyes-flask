@@ -131,6 +131,9 @@ class LivePlayer:
         self.on_status: Callable[[CameraStatus], None] = lambda status: None
         self._pending_report: tuple[str, str | None] | None = None
         self._next_report_try = 0.0
+        self._finished = (
+            threading.Event()
+        )  # play()가 끝났다. 남은 분석 스레드는 더 넘기지 않는다
 
     def play(
         self, camera_id: int, source_uri: str, stop: threading.Event
@@ -174,6 +177,7 @@ class LivePlayer:
         finally:
             latest.close()
             worker.join(ANALYSIS_JOIN_SEC)
+            self._finished.set()
             if worker.is_alive():
                 logger.warning(
                     "라이브 분석 스레드가 제때 끝나지 않음 cameraId=%s", camera_id
@@ -200,11 +204,21 @@ class LivePlayer:
                 if capture is None:
                     capture = self._connect(source_uri)
                     if capture is not None:
+                        if stop.is_set():
+                            break  # 연결하는 동안 정지가 들어왔다. 읽지 않고 나간다
                         logger.info(
                             "스트림 연결됨 cameraId=%s uri=%s", camera_id, shown
                         )
                 if capture is not None:
-                    ok, frame = capture.read()
+                    try:
+                        ok, frame = capture.read()
+                    except Exception:
+                        # cv2.error 등: 읽기 실패와 같은 경로로 연결을 닫고 다시 연결한다
+                        if attempts == 0 or attempts % _LOG_EVERY == 0:
+                            logger.exception(
+                                "프레임을 읽다 예외 cameraId=%s", camera_id
+                            )
+                        ok, frame = False, None
                     if ok and frame is not None and getattr(frame, "size", 1) > 0:
                         at = self._wall()
                         last_good = self._clock()
@@ -271,24 +285,28 @@ class LivePlayer:
         try:
             while True:
                 reset, item, closed = latest.take(ANALYSIS_POLL_SEC)
-                if reset:
-                    analyzer.end_session()
-                if item is not None:
-                    try:
+                try:
+                    if reset:
+                        analyzer.end_session()
+                    if item is not None:
                         self._analyze(camera_id, analyzer, *item)
-                    except Exception:
-                        errors += 1
-                        if errors == 1 or errors % _LOG_EVERY == 0:
-                            logger.exception(
-                                "라이브 분석 중 예외 cameraId=%s (누적 %s번)",
-                                camera_id,
-                                errors,
-                            )
-                elif closed:
+                    analyzer.flush_idle(self._wall())
+                except Exception:
+                    # 한 번의 예외로 분석 스레드가 죽어 이후 분석이 멈추지 않게 한다
+                    errors += 1
+                    if errors == 1 or errors % _LOG_EVERY == 0:
+                        logger.exception(
+                            "라이브 분석 중 예외 cameraId=%s (누적 %s번)",
+                            camera_id,
+                            errors,
+                        )
+                if item is None and closed:
                     break
-                analyzer.flush_idle(self._wall())
         finally:
-            analyzer.close()
+            try:
+                analyzer.close()
+            except Exception:
+                logger.exception("라이브 분석 마무리 중 예외 cameraId=%s", camera_id)
             if latest.dropped:
                 logger.info(
                     "분석이 따라가지 못해 오래된 프레임을 버림 cameraId=%s (%s장)",
@@ -300,8 +318,8 @@ class LivePlayer:
         self, camera_id: int, analyzer: LiveAnalyzer, frame: np.ndarray, at: float
     ) -> None:
         result = analyzer.analyze(frame, at)
-        if result is None:
-            return
+        if result is None or self._finished.is_set():
+            return  # 읽기 쪽이 끝난 뒤(분석이 늦게 끝난 경우)에는 녹화기·화면에 넘기지 않는다
         if self._recorder is not None:
             self._recorder.add_boxes(at, result.boxes)
         stream = self._streams.get(camera_id)

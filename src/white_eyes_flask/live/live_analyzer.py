@@ -65,7 +65,6 @@ class LiveAnalyzer:
         self._edge: EdgeCounter | None = None
         self._last_slot = -1
         self._current: _Second | None = None
-        self._carry: dict[str, Any] | None = None
 
     def analyze(self, frame: np.ndarray, at: float) -> FrameResult | None:
         """프레임 하나를 분석한다. 탐지에 실패한 프레임은 None(추적기가 로그를 남김)."""
@@ -117,23 +116,20 @@ class LiveAnalyzer:
     def _roll(self, second: int) -> None:
         """프레임이 속한 초가 바뀌었으면 이전 초를 보내고 새 초를 시작한다."""
         if self._current is None:
-            self._current = self._new_second(second)
+            self._current = _Second(second)
             return
         if second <= self._current.at:
             return  # 같은 초(시계가 되돌아간 경우도 지금 초로 둔다)
         self._collect_counts()
         self._emit()
-        self._current = self._new_second(second)
-
-    def _new_second(self, second: int) -> _Second:
-        current = _Second(second)
-        if self._carry is not None:
-            current.add_counts(self._carry)  # 보낼 초가 없을 때 확정된 유입/유출
-            self._carry = None
-        return current
+        self._current = _Second(second)
 
     def _collect_counts(self) -> None:
-        """추적기에 쌓인 유입/유출을 지금 초에 넣는다. 지금 초가 없으면 다음 초로 미룬다."""
+        """추적기에 쌓인 유입/유출을 지금 초에 넣는다.
+
+        지금 초가 없으면(이미 보냈거나 프레임이 없던 때) 다른 시각에 붙이지 않고 버린다.
+        끊긴 동안은 빈 구간이라는 규칙과 같다. close()도 같은 경로라 같은 규칙이다.
+        """
         if self._edge is None:
             return
         counts = self._edge.pop_counts()
@@ -142,7 +138,12 @@ class LiveAnalyzer:
         elif counts["dwell_sec"] or any(
             counts[kind][d] for kind in ("in", "out") for d in DIRECTIONS
         ):
-            self._carry = counts
+            logger.info(
+                "보낼 초가 없어 확정된 유입/유출을 버림 cameraId=%s in=%s out=%s",
+                self._camera_id,
+                counts["in"],
+                counts["out"],
+            )
 
     def _emit(self) -> None:
         current, self._current = self._current, None

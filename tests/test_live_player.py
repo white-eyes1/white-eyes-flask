@@ -318,3 +318,141 @@ def test_uri_helpers():
     assert not is_rtsp_uri("http://cam/s") and not is_rtsp_uri("dummy/videos/a.mp4")
     assert mask_uri("rtsp://admin:pw@10.0.0.5/s") == "rtsp://***@10.0.0.5/s"
     assert mask_uri("rtsp://10.0.0.5/s") == "rtsp://10.0.0.5/s"
+
+
+# ---------- 검수 반영 ----------
+
+
+class RaisingCapture(FakeCapture):
+    def read(self):
+        raise RuntimeError("cv2.error: decode failed")
+
+
+def test_exception_while_reading_reconnects_instead_of_ending_the_job():
+    bad = RaisingCapture()
+    good = FakeCapture(delay=0.01)
+    recorder = FakeRecorder()
+    player, _, _, _ = make([bad, good], recorder)
+    thread, stop, outcome = run(player)
+    assert wait_until(lambda: len(recorder.frames) >= 3)
+    assert bad.released
+    assert thread.is_alive() and outcome == []
+    finish(thread, stop)
+    assert outcome == [PlayOutcome.STOPPED]
+
+
+def test_stop_during_a_slow_connect_ends_within_the_stop_wait():
+    class SlowFactory:
+        reads = 0
+
+        def __call__(self, uri):
+            time.sleep(5)  # 연결이 5초 걸린다
+            cap = FakeCapture()
+            orig = cap.read
+
+            def read():
+                SlowFactory.reads += 1
+                return orig()
+
+            cap.read = read
+            return cap
+
+    player, *_ = make([])
+    player._capture_factory = SlowFactory()
+    thread, stop, outcome = run(player)
+    time.sleep(0.2)
+    began = time.monotonic()
+    stop.set()
+    thread.join(10)
+    assert not thread.is_alive()
+    assert time.monotonic() - began < 10  # CameraJob의 STOP_WAIT_SEC
+    assert SlowFactory.reads == 0  # 연결 직후 정지를 보고 읽지 않고 나왔다
+    assert outcome == [PlayOutcome.STOPPED]
+
+
+def test_analysis_thread_survives_an_exception(monkeypatch):
+    calls = {"n": 0}
+    original = LiveAnalyzer.analyze
+
+    def flaky(self, frame, at):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return original(self, frame, at)
+
+    monkeypatch.setattr(LiveAnalyzer, "analyze", flaky)
+    recorder = FakeRecorder()
+    player, _, _, _ = make([FakeCapture(delay=0.01)], recorder)
+    thread, stop, _ = run(player)
+    assert wait_until(lambda: len(recorder.boxes) >= 2)  # 예외 뒤에도 분석이 이어진다
+    finish(thread, stop)
+
+
+def test_analysis_thread_survives_an_exception_in_flush_idle(monkeypatch):
+    calls = {"n": 0}
+
+    def bad_flush(self, now):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(LiveAnalyzer, "flush_idle", bad_flush)
+    recorder = FakeRecorder()
+    player, _, _, _ = make([FakeCapture(delay=0.01)], recorder)
+    thread, stop, _ = run(player)
+    assert wait_until(lambda: calls["n"] >= 3 and len(recorder.boxes) >= 2)
+    finish(thread, stop)
+
+
+class ScriptedDetector:
+    def __init__(self, boxes):
+        self.boxes = list(boxes)
+
+    def detect(self, frame):
+        return np.array([self.boxes.pop(0)])
+
+
+def test_leavers_confirmed_with_no_second_to_send_are_dropped(caplog):
+    from white_eyes_flask.analysis.result import FrameResult, TrackedBox
+
+    class WalkingTracker:
+        """추적 번호 1번 사람이 가운데에 있다가 왼쪽 띠로 나간다."""
+
+        def __init__(self):
+            self.xs = [0.5, 0.5, 0.02, 0.02]
+
+        def update(self, frame):
+            cx = self.xs.pop(0)
+            box = TrackedBox(1, cx - 0.05, 0.4, 0.1, 0.2, cx, 0.5, 0.9)
+            return FrameResult(count=1, boxes=[box])
+
+    sink = ResultQueue()
+    analyzer = LiveAnalyzer(
+        7, FakeDetector(), sink, fps=5, conf_thres=0.3, edge_margin=0.05
+    )
+    analyzer.analyze(FRAME, 100.0)
+    analyzer._tracker = WalkingTracker()
+    for at in (100.2, 100.4, 100.6):
+        analyzer.analyze(FRAME, at)
+    analyzer.flush_idle(103.0)  # 100초를 보냈다. 이제 보낼 초가 없다
+    assert len(sink) == 1
+    with caplog.at_level("INFO"):
+        analyzer.end_session()  # 여기서 나간 사람이 확정된다
+    assert "버림" in caplog.text
+    analyzer.analyze(FRAME, 5000.0)  # 몇 시간 뒤 첫 프레임
+    analyzer.close()
+    items = sink.drain()
+    assert len(items) == 2
+    # 옛 유출이 몇 시간 뒤의 초에 붙지 않는다
+    assert sum(items[1]["out"].values()) == 0 and items[1]["dwellSec"] == []
+
+
+def test_close_drops_leavers_when_there_is_no_second(caplog):
+    sink = ResultQueue()
+    analyzer = LiveAnalyzer(
+        7, FakeDetector(), sink, fps=5, conf_thres=0.3, edge_margin=0.05
+    )
+    analyzer.analyze(FRAME, 100.0)
+    analyzer.flush_idle(103.0)
+    analyzer.close()  # 이미 보낸 뒤라 보낼 초가 없다. 예외 없이 끝나고 다시 보내지 않는다
+    assert len(sink) == 1

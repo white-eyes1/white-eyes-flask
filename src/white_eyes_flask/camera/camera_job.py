@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from enum import StrEnum
 
 from white_eyes_flask.camera.player import NullPlayer, Player, PlayOutcome
@@ -31,6 +32,8 @@ class CameraJob:
     ) -> None:
         self.camera_id = camera_id
         self.source_uri = source_uri
+        # 상태 확인(FNC-S-013)이 이전 작업의 결과 시각을 걸러내는 데 쓴다
+        self.started_at = time.time()
         # 작업 스레드가 쓰고 CameraService.start()가 호출 스레드에서 읽는다(code-conventions 4-3).
         self._status_lock = threading.Lock()
         self._status = status

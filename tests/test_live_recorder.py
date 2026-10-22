@@ -16,7 +16,11 @@ from white_eyes_flask.analysis.result import TrackedBox
 from white_eyes_flask.camera.kst import KST
 from white_eyes_flask.recording import recorder as recorder_module
 from white_eyes_flask.recording.ffmpeg import RecorderSettings
-from white_eyes_flask.recording.recorder import LiveRecorder, RecorderUnavailable
+from white_eyes_flask.recording.recorder import (
+    LiveRecorder,
+    RecorderFailed,
+    RecorderUnavailable,
+)
 
 FRAME = np.zeros((4, 6, 3), dtype=np.uint8)
 
@@ -54,6 +58,7 @@ class FakeProc:
         self.command = command
         self.stdin = stdin
         self._returncode = returncode
+        self.exited = False
         self.terminated = False
         self.killed = False
         self.hang = False
@@ -78,10 +83,16 @@ class FakeProc:
     def wait(self, timeout=None):
         if self.hang and not self.terminated:
             raise subprocess.TimeoutExpired("ffmpeg", timeout)
+        self.exited = True
         return self._returncode
 
+    def die(self, code: int = 137) -> None:
+        """녹화 중에 ffmpeg가 죽은 것을 흉내."""
+        self._returncode = code
+        self.exited = True
+
     def poll(self):
-        return self._returncode
+        return self._returncode if self.exited else None
 
     def terminate(self):
         self.terminated = True
@@ -99,7 +110,8 @@ class FakePublisher:
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, **proc_kwargs) -> None:
+    def __init__(self, tmp_path: Path, grace: float = 0.0, **proc_kwargs) -> None:
+        self.now = 1000.0  # 가짜 시계(초)
         self.tmp = tmp_path / "tmp"
         self.publisher = FakePublisher()
         self.proc: FakeProc | None = None
@@ -109,6 +121,8 @@ class Harness:
             RecorderSettings(tmp_dir=str(self.tmp), analyze_fps=5),
             self.publisher,
             popen=self._popen,
+            box_grace_sec=grace,
+            clock=lambda: self.now,
         )
 
     def _popen(self, command, stdin=None, stdout=None, stderr=None):
@@ -430,3 +444,128 @@ def test_ffmpeg_is_killed_if_terminate_is_not_enough(tmp_path, monkeypatch):
     finally:
         FakeProc.terminate = original
     assert harness.proc.killed
+
+
+def test_a_closed_file_waits_until_analysis_has_passed_the_minute(tmp_path):
+    harness = Harness(tmp_path, grace=10.0)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    rec.add_boxes(at(14, 3, 50), [box(1)])
+    harness.proc.finish(0)
+    rec.poll_segments()
+    assert harness.publisher.items == []  # 분석이 아직 14:04를 넘지 않았다
+    rec.add_boxes(at(14, 3, 59.5), [box(2)])  # 분 끝 박스가 늦게 도착
+    rec.poll_segments()
+    assert harness.publisher.items == []
+    rec.add_boxes(at(14, 4, 0.2), [box(3)])  # 분석이 경계를 넘었다
+    rec.poll_segments()
+    (first,) = harness.publisher.items
+    ids = [f["b"][0][0] for f in read_boxes(first.boxes)["frames"]]
+    assert ids == [1, 2]  # 늦게 도착한 분 끝 박스도 들어갔다
+    rec.close()
+
+
+def test_a_closed_file_is_published_after_the_grace_time_even_without_boxes(tmp_path):
+    harness = Harness(tmp_path, grace=10.0)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    harness.proc.finish(0)
+    rec.poll_segments()
+    assert harness.publisher.items == []
+    harness.now += 11
+    rec.poll_segments()
+    assert len(harness.publisher.items) == 1
+    rec.close()
+
+
+def test_files_are_published_in_order(tmp_path):
+    harness = Harness(tmp_path, grace=10.0)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    harness.proc.finish(0)
+    harness.proc.finish(1)
+    rec.add_boxes(at(14, 5, 1), [box(1)])  # 둘째 파일 쪽은 이미 조건이 충족됐다
+    rec.poll_segments()
+    names = [item.video.name for item in harness.publisher.items]
+    assert names == [harness.proc.segment(0).name, harness.proc.segment(1).name]
+    rec.close()
+
+
+def test_closing_publishes_files_that_are_still_waiting(tmp_path):
+    harness = Harness(tmp_path, grace=10.0)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(0)
+    rec.close()
+    assert len(harness.publisher.items) == 1
+
+
+def test_the_last_file_is_never_zero_length(harness):
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 20))  # 프레임이 한 장뿐
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(0)
+    rec.close()
+    (item,) = harness.publisher.items
+    assert item.ended_ms > item.started_ms
+
+
+def test_write_frame_raises_after_ffmpeg_dies_and_boxes_are_not_kept(harness, caplog):
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 10))
+    harness.proc.die()
+    with caplog.at_level(logging.ERROR):
+        rec._check_alive()
+    assert any("녹화 중에 죽음" in record.message for record in caplog.records)
+    with pytest.raises(RecorderFailed):
+        rec.write_frame(FRAME, at(14, 3, 11))
+    rec.add_boxes(at(14, 3, 12), [box(1)])
+    assert rec._boxes == []
+    rec.close()
+
+
+def test_a_frame_of_another_size_is_resized_to_the_first_one(harness, caplog):
+    rec = harness.recorder
+    rec.write_frame(np.zeros((8, 12, 3), dtype=np.uint8), at(14, 3, 1))
+    with caplog.at_level(logging.WARNING):
+        rec.write_frame(np.zeros((16, 24, 3), dtype=np.uint8), at(14, 3, 2))
+    rec.close()
+    sizes = {len(chunk) for chunk in harness.proc.stdin.chunks}
+    assert sizes == {8 * 12 * 3}  # 두 번째도 처음 크기로 들어갔다
+    assert any("크기가 바뀌어" in record.message for record in caplog.records)
+
+
+def test_old_boxes_are_dropped_when_no_file_ever_comes_out(
+    harness, monkeypatch, caplog
+):
+    monkeypatch.setattr(recorder_module, "BOX_BACKLOG_LIMIT", 20)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 0))
+    with caplog.at_level(logging.WARNING):
+        for index in range(60):
+            rec.add_boxes(at(14, 3, index * 0.1), [box(1)])
+    assert len(rec._boxes) <= 20
+    assert any("오래된 박스를 버림" in record.message for record in caplog.records)
+    rec.close()
+
+
+def test_close_is_fast_even_if_the_pipe_is_stuck(tmp_path):
+    gate = threading.Event()  # 열리지 않는다: ffmpeg가 입력을 안 읽는 상태
+    harness = Harness(tmp_path, gate=gate, hang=True)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 1))
+    time.sleep(0.2)  # 쓰기 스레드가 write에서 막히게 한다
+    started = time.monotonic()
+    rec.close()
+    assert time.monotonic() - started < 8.0
+    assert harness.proc.terminated  # 끝나길 기다리지 않고 바로 종료시켰다
+    gate.set()
+
+
+def test_files_that_never_closed_are_not_published_and_are_reported(harness, caplog):
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 10))
+    harness.proc.segment(0).write_bytes(b"half")  # 목록에는 오르지 않은 파일
+    with caplog.at_level(logging.WARNING):
+        rec.close()
+    assert harness.publisher.items == []
+    assert any("닫히지 못한 녹화 파일" in record.message for record in caplog.records)

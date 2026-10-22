@@ -232,3 +232,43 @@ def test_publisher_can_be_started_again_after_stop(media, local):
         assert len(registrar.calls) == 1
     finally:
         pub.stop()
+
+
+def test_move_failures_are_retried_without_a_limit(media, local, clock):
+    # 공유 폴더가 한참 안 돌아와도 로컬 파일을 포기하지 않고 계속 다시 옮긴다
+    media.write_bytes(b"not a folder")
+    registrar = FakeRegistrar()
+    pub = publisher(media, registrar, clock)
+    item = recording(local)
+    pub.submit(item)
+    for _ in range(MAX_ATTEMPTS + 10):
+        pub.run_due()
+        clock.now += 60
+    assert pub.pending == 1
+    assert item.video.exists() and item.boxes.exists()
+    media.unlink()
+    pub.run_due()
+    assert len(registrar.calls) == 1
+
+
+def test_one_failing_job_does_not_block_the_others(media, local, clock, caplog):
+    class Exploding(FakeRegistrar):
+        def register(self, camera_id, *args, **kwargs):
+            if camera_id == 7:
+                raise RuntimeError("boom")
+            return super().register(camera_id, *args, **kwargs)
+
+    registrar = Exploding()
+    pub = publisher(media, registrar, clock)
+    pub.submit(recording(local))  # cameraId=7: 등록에서 예외
+    other_local = local.parent / "tmp2"
+    other_local.mkdir()
+    video = other_local / "v.mp4"
+    boxes = other_local / "b.json.gz"
+    video.write_bytes(b"v")
+    boxes.write_bytes(b"b")
+    pub.submit(FinishedRecording(8, ms(14, 3, 27), ms(14, 4), video, boxes))
+    with caplog.at_level(logging.ERROR):
+        pub.run_due()
+    assert [call[0] for call in registrar.calls] == [8]
+    assert any("게시 중 예외" in record.message for record in caplog.records)

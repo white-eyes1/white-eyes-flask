@@ -1,7 +1,8 @@
 """FNC-S-008 4~6번: 완성된 녹화 파일을 공유 폴더로 옮기고 관리자 앱에 등록한다.
 
-캠 작업 스레드나 정지 요청을 막지 않게 별도 스레드 하나가 맡는다. 실패하면 1분 뒤에 다시 하고,
-같은 단계에서 MAX_ATTEMPTS번 넘게 실패하면 로그만 남긴다(파일은 남는다).
+캠 작업 스레드나 정지 요청을 막지 않게 별도 스레드 하나가 맡는다. 실패하면 1분 뒤에 다시 한다.
+공유 폴더로 옮기지 못하면 로컬에 남기고 계속 다시 옮기고(명세: 다음 분에 다시 옮김), 등록은
+MAX_ATTEMPTS번 넘게 실패하면 로그만 남긴다(파일은 공유 폴더에 남는다).
 """
 
 import contextlib
@@ -101,7 +102,15 @@ class RecordingPublisher:
         with self._lock:
             due = [job for job in self._jobs if job.due <= now]
         for job in due:
-            if self._step(job):
+            # 한 작업의 예외가 뒤 작업을 막지 않게 작업별로 감싼다
+            try:
+                finished = self._step(job)
+            except Exception:
+                logger.exception(
+                    "녹화 게시 중 예외 cameraId=%s", job.recording.camera_id
+                )
+                finished = self._give_up_or_retry(job, "register_failures", "녹화 게시")
+            if finished:
                 with self._lock:
                     self._jobs.remove(job)
         with self._lock:
@@ -124,9 +133,10 @@ class RecordingPublisher:
         recording = job.recording
         if job.video_path is None:
             if not self._move(job):
-                return self._give_up_or_retry(
-                    job, "move_failures", "공유 폴더로 옮기기"
-                )
+                # 공유 폴더가 돌아올 때까지 로컬에 두고 계속 다시 옮긴다(횟수 제한 없음)
+                job.move_failures += 1
+                job.due = self._clock() + self._retry_sec
+                return False
         result = self._registrar.register(
             recording.camera_id,
             recording.started_ms,

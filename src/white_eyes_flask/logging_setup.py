@@ -14,8 +14,8 @@ LOG_FORMAT = (
 )
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 NO_REQUEST_ID = "-"
-# 캠 작업 스레드 이름: cam-{cameraId}, 녹화 등록 스레드 cam-{cameraId}-recording
-CAMERA_THREAD = re.compile(r"cam-(\d+)(?:-recording)?")
+# 캠 작업 스레드 이름: cam-{cameraId}, 녹화 등록 스레드 cam-{cameraId}-recording, 더미 미리보기 스레드 cam-{cameraId}-preview
+CAMERA_THREAD = re.compile(r"cam-(\d+)(?:-(?:recording|preview))?")
 # 밖에서 받은 X-Request-Id는 이 모양만 믿는다(로그 줄을 속이는 문자를 막는다).
 REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 

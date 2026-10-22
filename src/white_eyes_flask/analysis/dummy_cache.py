@@ -53,6 +53,10 @@ class DummyCache:
     def result_path(self, source_uri: str) -> Path:
         return self._cache_dir / f"{self.name(source_uri)}.json"
 
+    def video_path(self, source_uri: str) -> Path:
+        """원본 영상 파일(공유 폴더 기준 source_uri). 미리보기가 프레임을 읽는다."""
+        return self._media_root / source_uri
+
     def boxes_relative_path(self, source_uri: str) -> str:
         return f"{BOXES_DIR}/{self.name(source_uri)}.json.gz"
 

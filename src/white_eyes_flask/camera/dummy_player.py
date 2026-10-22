@@ -8,10 +8,11 @@ import time
 from typing import Any, Callable
 
 from white_eyes_flask.analysis.dummy_cache import (
-    CacheInvalidError,
     CachedResult,
+    CacheInvalidError,
     DummyCache,
 )
+from white_eyes_flask.camera.dummy_preview import DummyPreview
 from white_eyes_flask.camera.kst import format_at
 from white_eyes_flask.camera.player import PlayOutcome
 from white_eyes_flask.camera.recording_registrar import RegisterResult
@@ -158,6 +159,8 @@ class DummyPlayer:
         retry_interval: float = 1.0,
         retry_window: float = 300.0,
         inline_registration: bool = False,
+        streams: Any = None,
+        preview_fps: int = 5,
     ) -> None:
         self._cache = cache
         self._registrar = registrar
@@ -168,6 +171,9 @@ class DummyPlayer:
         self._retry_interval = retry_interval
         self._retry_window = retry_window
         self._inline = inline_registration
+        # 실시간 화면·미리보기용 프레임을 넣을 StreamService(FNC-S-010 5번). 없으면 프레임을 만들지 않는다
+        self._streams = streams
+        self._preview_fps = preview_fps
 
     def play(
         self, camera_id: int, source_uri: str, stop: threading.Event
@@ -196,11 +202,41 @@ class DummyPlayer:
             inline=self._inline,
         )
         worker.start()
+        state = _Repetition(cached.duration_sec)
+        preview: DummyPreview | None = None
         try:
-            self._loop(camera_id, cached, worker, stop)
+            preview = self._start_preview(camera_id, source_uri, cached, state, stop)
+            self._loop(camera_id, cached, worker, stop, state)
         finally:
+            # 재생 루프가 예외로 끝나도 미리보기 스레드와 등록 작업을 반드시 끝낸다
+            if preview is not None:
+                preview.shutdown()
             worker.shutdown()
         return PlayOutcome.STOPPED
+
+    def _start_preview(
+        self,
+        camera_id: int,
+        source_uri: str,
+        cached: CachedResult,
+        state: "_Repetition",
+        stop: threading.Event,
+    ) -> DummyPreview | None:
+        """캠의 스트림이 있으면 미리보기 프레임을 만드는 스레드를 시작한다."""
+        stream = self._streams.get(camera_id) if self._streams is not None else None
+        if stream is None:
+            return None
+        preview = DummyPreview(
+            stream,
+            self._cache.video_path(source_uri),
+            self._cache.boxes_path(source_uri),
+            cached.seconds,
+            lambda: state.position(self._clock()),
+            fps=self._preview_fps,
+            stop=stop,
+        )
+        preview.start(f"cam-{camera_id}-preview")
+        return preview
 
     def _loop(
         self,
@@ -208,8 +244,9 @@ class DummyPlayer:
         cached: CachedResult,
         worker: RegistrationWorker,
         stop: threading.Event,
+        state: "_Repetition | None" = None,
     ) -> None:
-        state = _Repetition()
+        state = state or _Repetition(cached.duration_sec)
         last_at: int | None = None
         while not stop.is_set():
             now_sec = math.floor(self._clock())
@@ -269,7 +306,32 @@ class DummyPlayer:
 
 
 class _Repetition:
-    """지금 반복의 시작 시각 S(초 단위 epoch). 반복이 시작되기 전에는 None."""
+    """지금 반복의 시작 시각 S(초 단위 epoch). 반복이 시작되기 전에는 None.
 
-    def __init__(self) -> None:
-        self.start: int | None = None
+    재생 루프가 S를 정하고, 미리보기 스레드가 같은 S로 영상 위치를 계산한다.
+    """
+
+    def __init__(self, duration_sec: float) -> None:
+        self._lock = threading.Lock()
+        self._start: int | None = None
+        self._duration_sec = duration_sec
+
+    @property
+    def start(self) -> int | None:
+        with self._lock:
+            return self._start
+
+    @start.setter
+    def start(self, value: int | None) -> None:
+        with self._lock:
+            self._start = value
+
+    def position(self, now: float) -> float | None:
+        """지금 영상 위치(초). 재생이 시작되지 않았거나 시계가 S보다 앞서면 None.
+
+        다음 반복의 S가 정해지기 전(영상 길이를 넘은 직후 1초 안)에는 마지막 위치에 머문다.
+        """
+        start = self.start
+        if start is None or now < start:
+            return None
+        return min(now - start, max(0.0, self._duration_sec - 0.001))

@@ -151,6 +151,15 @@ class CameraService:
         with self._lock:
             return sum(1 for job in self._jobs.values() if job.is_alive())
 
+    def camera_states(self) -> list[tuple[int, CameraStatus, float]]:
+        """상태 확인(FNC-S-013)용 (캠 번호, 상태, 시작 시각 epoch초). 캠 번호 순.
+
+        정지하기 전까지는 스레드가 오류로 끝난 캠(ERROR)도 포함한다.
+        """
+        with self._lock:
+            jobs = sorted(self._jobs.values(), key=lambda job: job.camera_id)
+        return [(job.camera_id, job.status, job.started_at) for job in jobs]
+
     def shutdown(self) -> None:
         """모든 캠을 stop()으로 멈춘다. 진행 중인 정지와 남은 옛 스레드도 캠별 잠금으로 기다린다."""
         with self._lock:

@@ -149,7 +149,12 @@ def test_unauthorized_response_still_carries_a_request_id(tmp_path):
 
 @pytest.mark.parametrize(
     "thread_name, expected",
-    [("cam-7", "cam-7"), ("cam-12-recording", "cam-12"), ("result-sender", "-")],
+    [
+        ("cam-7", "cam-7"),
+        ("cam-12-recording", "cam-12"),
+        ("cam-5-preview", "cam-5"),  # 더미 미리보기 스레드(FNC-S-010 5번)
+        ("result-sender", "-"),
+    ],
 )
 def test_worker_thread_logs_the_camera_id(capsys, thread_name, expected):
     configure_logging("INFO")

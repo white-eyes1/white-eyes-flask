@@ -21,6 +21,7 @@ from white_eyes_flask.logging_setup import (
     NO_REQUEST_ID,
     accept_request_id,
     configure_logging,
+    remember_request_id,
 )
 from white_eyes_flask.stream.stream_controller import stream_bp
 from white_eyes_flask.stream.stream_service import StreamService
@@ -113,6 +114,7 @@ def create_app(
     def assign_request_id():
         incoming = accept_request_id(request.headers.get(REQUEST_ID_HEADER))
         g.request_id = incoming or uuid.uuid4().hex[:12]
+        remember_request_id(g.request_id)  # 요청이 끝난 뒤 찍히는 werkzeug 접속 로그용
 
     @app.after_request
     def return_request_id(response):

@@ -7,6 +7,7 @@ from pathlib import Path
 from white_eyes_flask.analysis.aerial_detector import VisDroneDetector
 from white_eyes_flask.analysis.boxes import DEFAULT_DEDUPE_OVERLAP
 from white_eyes_flask.analysis.detector import Detector, YoloCrowdDetector
+from white_eyes_flask.logging_setup import quiet_library_loggers
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class LazyDetectorProvider:
                 raise DetectorUnavailableError("가중치 파일이 없음(YOLO_WEIGHTS)")
             try:
                 self._detector = self._load(self._weights)
+                quiet_library_loggers()  # 모델을 불러오며 라이브러리가 로거를 다시 설정했을 수 있다
             except Exception as error:
                 logger.exception("탐지 모델 불러오기 실패")
                 raise DetectorUnavailableError("가중치를 불러오지 못함") from error

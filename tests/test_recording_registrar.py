@@ -177,3 +177,23 @@ def test_connection_failure_is_worth_retrying(caplog):
 def test_token_is_never_logged(caplog):
     register(RecordingRegistrar("http://127.0.0.1:1", TOKEN, timeout=0.5))
     assert TOKEN not in caplog.text
+
+
+def test_live_recording_sends_ended_at(server):
+    ended_ms = STARTED_MS + 40_000
+    result = registrar(server).register(
+        7,
+        STARTED_MS,
+        "recordings/live/cam7/20261012/cam7_20261012_1403.mp4",
+        "recordings/live/cam7/20261012/cam7_20261012_1403.json.gz",
+        ended_ms=ended_ms,
+    )
+    assert result == RegisterResult.OK
+    body = server.received[0]["body"]
+    assert body["startedAt"] == "2026-10-12T14:03:20.000+09:00"
+    assert body["endedAt"] == "2026-10-12T14:04:00.000+09:00"
+
+
+def test_dummy_recording_has_no_ended_at(server):
+    register(registrar(server))
+    assert "endedAt" not in server.received[0]["body"]

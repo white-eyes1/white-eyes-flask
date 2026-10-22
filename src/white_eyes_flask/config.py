@@ -23,6 +23,7 @@ class Config:
     record_fps: int = 10
     record_tmp_dir: str = "/var/lib/analyzer/tmp"
     ffmpeg_bin: str = "ffmpeg"
+    log_level: str = "INFO"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -50,4 +51,5 @@ class Config:
             record_fps=int(os.environ.get("RECORD_FPS", "10")),
             record_tmp_dir=os.environ.get("RECORD_TMP_DIR", "/var/lib/analyzer/tmp"),
             ffmpeg_bin=os.environ.get("FFMPEG_BIN", "ffmpeg"),
+            log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )

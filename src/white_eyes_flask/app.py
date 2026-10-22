@@ -8,6 +8,7 @@ from white_eyes_flask.analysis.dummy_cache import DummyCache
 from white_eyes_flask.camera.camera_controller import camera_bp
 from white_eyes_flask.camera.camera_service import CameraService
 from white_eyes_flask.camera.dummy_player import DummyPlayer
+from white_eyes_flask.camera.kst import format_at
 from white_eyes_flask.camera.player import Player
 from white_eyes_flask.camera.preparer import DummyPreparer, Preparer
 from white_eyes_flask.camera.recording_registrar import RecordingRegistrar
@@ -49,13 +50,18 @@ def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
 
 
 def build_player(
-    config: Config, cache: DummyCache, result_queue: ResultQueue
+    config: Config,
+    cache: DummyCache,
+    result_queue: ResultQueue,
+    streams: StreamService | None = None,
 ) -> DummyPlayer:
     return DummyPlayer(
         cache,
         RecordingRegistrar(config.admin_internal_base_url, config.internal_token),
         result_queue,
         StatusReporter(config.admin_internal_base_url, config.internal_token),
+        streams=streams,
+        preview_fps=config.analyze_fps,
     )
 
 
@@ -97,7 +103,7 @@ def create_app(
     app.extensions["camera_service"] = CameraService(
         config.media_root,
         preparer or build_preparer(config, cache),
-        player or build_player(config, cache, result_queue),
+        player or build_player(config, cache, result_queue, stream_service),
         stream_service,
     )
     app.register_blueprint(camera_bp)
@@ -130,9 +136,27 @@ def create_app(
 
     @app.get("/analyzer/v1/health")
     def health():
-        # 캠 작업 현황(FNC-S-013)은 캠 작업 구현 때 채운다. bufferSize는 못 보낸 결과 수다.
+        # cameras는 캠 번호 순. lastResultAt은 그 캠이 이번에 시작한 뒤 전송 큐에 넣은 마지막
+        # 결과 시각이고, 아직 없으면 null이다. bufferSize는 못 보낸 결과 수다.
         sender = app.extensions.get("result_sender")
         pending = sender.pending if sender is not None else 0
-        return jsonify(status="UP", cameras=[], bufferSize=pending)
+        queue = app.extensions["result_queue"]
+        cameras = []
+        for camera_id, status, started_at in app.extensions[
+            "camera_service"
+        ].camera_states():
+            last = queue.last_put_at(camera_id)
+            cameras.append(
+                {
+                    "cameraId": camera_id,
+                    "state": str(status),
+                    "lastResultAt": (
+                        format_at(last)
+                        if last is not None and last >= started_at
+                        else None
+                    ),
+                }
+            )
+        return jsonify(status="UP", cameras=cameras, bufferSize=pending)
 
     return app

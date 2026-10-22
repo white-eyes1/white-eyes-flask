@@ -1,6 +1,7 @@
 import hmac
+import uuid
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 
 from white_eyes_flask.analysis.detector_provider import LazyDetectorProvider
 from white_eyes_flask.analysis.dummy_cache import DummyCache
@@ -15,8 +16,14 @@ from white_eyes_flask.camera.result_queue import ResultQueue
 from white_eyes_flask.camera.result_sender import ResultSender
 from white_eyes_flask.camera.status_reporter import StatusReporter
 from white_eyes_flask.config import Config
+from white_eyes_flask.logging_setup import (
+    NO_REQUEST_ID,
+    accept_request_id,
+    configure_logging,
+)
 
 TOKEN_HEADER = "X-Internal-Token"
+REQUEST_ID_HEADER = "X-Request-Id"
 
 
 def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
@@ -64,6 +71,7 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     config = config or Config.from_env()
+    configure_logging(config.log_level)
     app.config["APP_CONFIG"] = config
     cache = DummyCache(config.cache_dir, config.media_root)
     # 1초 결과 전송 큐. 재생기가 넣고 전송기(FNC-S-006)가 비운다.
@@ -81,6 +89,17 @@ def create_app(
     if result_sender is not None:
         app.extensions["result_sender"] = result_sender
         result_sender.start()
+
+    # 토큰 검사보다 먼저 등록해서 401 응답의 로그에도 요청 ID가 남게 한다.
+    @app.before_request
+    def assign_request_id():
+        incoming = accept_request_id(request.headers.get(REQUEST_ID_HEADER))
+        g.request_id = incoming or uuid.uuid4().hex[:12]
+
+    @app.after_request
+    def return_request_id(response):
+        response.headers[REQUEST_ID_HEADER] = g.get("request_id", NO_REQUEST_ID)
+        return response
 
     @app.before_request
     def check_internal_token():

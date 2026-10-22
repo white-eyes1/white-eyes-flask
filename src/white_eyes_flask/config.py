@@ -18,6 +18,7 @@ class Config:
     result_retry_buffer_sec: int = 300
     detector: str = "visdrone"
     detect_dedupe_overlap: float = 0
+    log_level: str = "INFO"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -40,4 +41,5 @@ class Config:
             ),
             detector=os.environ.get("DETECTOR", "visdrone"),
             detect_dedupe_overlap=float(os.environ.get("DETECT_DEDUPE_OVERLAP", "0")),
+            log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )

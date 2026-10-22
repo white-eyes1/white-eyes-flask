@@ -18,6 +18,12 @@ def main() -> None:
         app.run(host=config.host, port=config.port, use_reloader=False)
     finally:
         recovery.stop()
+        # 도는 캠을 멈추면서 녹화 파일을 닫고, 막 완성된 파일을 한 번 더 공유 폴더로 옮겨 등록해 본다
+        app.extensions["camera_service"].shutdown()
+        publisher = app.extensions.get("recording_publisher")
+        if publisher is not None:
+            publisher.stop()
+            publisher.run_due()
         # 끝나기 전에 아직 못 보낸 1초 결과를 한 번 더 보내 본다
         sender = app.extensions.get("result_sender")
         if sender is not None:

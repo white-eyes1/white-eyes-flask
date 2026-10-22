@@ -6,7 +6,6 @@ from white_eyes_flask.camera.camera_service import (
     CameraService,
     CameraStoppingError,
     SourceNotFoundError,
-    SourceTypeNotSupportedError,
 )
 from white_eyes_flask.common.errors import error_response
 
@@ -36,10 +35,6 @@ def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
         status = service.start(camera_id, source_type, source_uri)
     except SourceNotFoundError:
         return error_response("SOURCE_NOT_FOUND", "영상 파일을 찾을 수 없습니다.", 400)
-    except SourceTypeNotSupportedError:
-        return error_response(
-            "SOURCE_TYPE_NOT_SUPPORTED", "아직 지원하지 않는 영상 종류입니다.", 501
-        )
     except CameraStoppingError:
         return error_response(
             "CAMERA_STOPPING",

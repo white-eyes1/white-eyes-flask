@@ -7,6 +7,9 @@ from pathlib import Path
 from white_eyes_flask.camera.camera_job import STOP_WAIT_SEC, CameraJob, CameraStatus
 from white_eyes_flask.camera.player import NullPlayer, Player
 from white_eyes_flask.camera.preparer import NullPreparer, Preparer
+from white_eyes_flask.live.live_factory import LiveWorkFactory
+from white_eyes_flask.live.live_player import LivePlayer
+from white_eyes_flask.live.live_source import is_rtsp_uri, mask_uri
 from white_eyes_flask.stream.stream_service import StreamService
 
 logger = logging.getLogger(__name__)
@@ -16,11 +19,7 @@ DUMMY_SUFFIX = ".mp4"
 
 
 class SourceNotFoundError(Exception):
-    """DUMMY 영상 파일이 없거나 경로 규칙에 맞지 않음."""
-
-
-class SourceTypeNotSupportedError(Exception):
-    """1단계에서 구현하지 않은 sourceType(LIVE)."""
+    """DUMMY 영상 파일이 없거나 경로 규칙에 맞지 않음. LIVE는 rtsp:// 주소가 아님."""
 
 
 class CameraStoppingError(Exception):
@@ -34,8 +33,11 @@ class CameraService:
         preparer: Preparer | None = None,
         player: Player | None = None,
         streams: StreamService | None = None,
+        live: LiveWorkFactory | None = None,
     ) -> None:
         self._media_root = Path(media_root)
+        # 없으면 LIVE 캠은 읽지 않고 정지될 때까지 기다리기만 한다(시험용 NullPlayer와 같다)
+        self._live = live
         # 캠 작업이 있는 동안만 실시간 화면용 스트림이 열려 있다(FNC-S-011).
         self._streams = streams or StreamService()
         self._preparer = preparer or NullPreparer()
@@ -61,16 +63,21 @@ class CameraService:
                 raise CameraStoppingError(camera_id)
 
             if source_type == "LIVE":
-                # LIVE 분기(FNC-S-007)는 2단계
-                raise SourceTypeNotSupportedError(source_type)
-
-            self._check_dummy_source(source_uri)
-            status = (
-                CameraStatus.RUNNING
-                if self._has_cache(source_uri)
-                else CameraStatus.PREPARING
-            )
-            job = CameraJob(camera_id, source_uri, status, self._preparer, self._player)
+                job = self._new_live_job(camera_id, source_uri)
+            else:
+                self._check_dummy_source(source_uri)
+                job = CameraJob(
+                    camera_id,
+                    source_uri,
+                    (
+                        CameraStatus.RUNNING
+                        if self._has_cache(source_uri)
+                        else CameraStatus.PREPARING
+                    ),
+                    self._preparer,
+                    self._player,
+                )
+            status = job.status
             self._streams.open(camera_id)
             job.start()
             with self._lock:
@@ -150,6 +157,27 @@ class CameraService:
             camera_ids = list(self._camera_locks)
         for camera_id in camera_ids:
             self.stop(camera_id)
+
+    def _new_live_job(self, camera_id: int, source_uri: str) -> CameraJob:
+        """LIVE 캠 작업(FNC-S-007). 명세대로 RUNNING으로 시작하고, 이후 상태는 라이브 재생기가 바꾼다."""
+        if not is_rtsp_uri(source_uri):
+            raise SourceNotFoundError(mask_uri(source_uri))
+        if self._live is None:
+            player, recorder = NullPlayer(), None
+        else:
+            player, recorder = self._live.create(camera_id)
+        job = CameraJob(
+            camera_id,
+            source_uri,
+            CameraStatus.RUNNING,
+            self._preparer,
+            player,
+            recorder,
+        )
+        if isinstance(player, LivePlayer):
+            # 연결이 끊겨 ERROR가 돼도 작업(스레드)은 계속 돈다. 그 상태를 작업에도 반영한다.
+            player.on_status = lambda status: setattr(job, "status", status)
+        return job
 
     def _check_dummy_source(self, source_uri: str) -> None:
         if (

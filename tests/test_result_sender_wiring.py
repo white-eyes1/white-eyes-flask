@@ -74,8 +74,12 @@ def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
         def stop(self):
             events.append("recovery stop")
 
+    class FakeService:
+        def shutdown(self):
+            events.append("service shutdown")
+
     class FakeApp:
-        extensions = {"result_sender": sender, "camera_service": object()}
+        extensions = {"result_sender": sender, "camera_service": FakeService()}
 
         def run(self, host, port, use_reloader=True):
             events.append(("run", host, port, use_reloader))
@@ -97,6 +101,7 @@ def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
         "recovery start",
         ("run", "127.0.0.1", 5001, False),
         "recovery stop",
+        "service shutdown",
     ]
     assert sender.stopped == 1
 

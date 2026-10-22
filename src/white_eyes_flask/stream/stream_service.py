@@ -12,12 +12,14 @@ from white_eyes_flask.stream.frame_renderer import (
     LIVE_WIDTH,
     SNAPSHOT_QUALITY,
     SNAPSHOT_WIDTH,
+    no_signal_jpeg,
     render_jpeg,
 )
 
 SNAPSHOT_REUSE_SEC = 1.0  # 같은 캠의 스냅샷을 이 시간 동안 다시 쓴다
 SNAPSHOT_WANTED_SEC = 10.0  # 마지막 스냅샷 요청 뒤 이 시간 동안은 프레임을 만들어 둔다
 FRAME_WAIT_SEC = 1.0  # 새 프레임을 기다리다 정지·끊김을 확인하는 간격
+IDLE_RESEND_SEC = 2.0  # 새 프레임이 없을 때 이 시간마다 이전 이미지를 다시 보낸다
 
 
 @dataclass(frozen=True)
@@ -111,7 +113,7 @@ class CameraStream:
             self._viewers += 1
         try:
             seen = 0
-            sent_at: float | None = None
+            sent_at = self._clock()
             while True:
                 with self._cond:
                     self._cond.wait_for(
@@ -120,10 +122,16 @@ class CameraStream:
                     )
                     if self._closed:
                         return
-                    if self._seq == seen or self._frame is None:
-                        continue
-                    seen = self._seq
-                jpeg = self._live_jpeg_for(seen)
+                    fresh = self._seq != seen and self._frame is not None
+                    if fresh:
+                        seen = self._seq
+                if fresh:
+                    jpeg = self._live_jpeg_for(seen)
+                elif self._clock() - sent_at >= IDLE_RESEND_SEC:
+                    # 프레임이 안 들어와도(RTSP 끊김) 가끔 보내야, 창을 닫았을 때 쓰기 오류로 알아챈다
+                    jpeg = self._idle_jpeg()
+                else:
+                    continue
                 if jpeg is None:
                     continue
                 yield jpeg
@@ -133,6 +141,12 @@ class CameraStream:
         finally:
             with self._cond:
                 self._viewers -= 1
+
+    def _idle_jpeg(self) -> bytes:
+        """새 프레임이 없을 때 다시 보낼 이미지: 마지막으로 보낸 프레임, 없으면 '신호 없음' 이미지."""
+        with self._cond:
+            cached = self._live_jpeg
+        return cached[1] if cached is not None else no_signal_jpeg()
 
     def _live_jpeg_for(self, seq: int) -> bytes | None:
         """프레임 번호 seq의 JPEG. 시청자가 여럿이어도 한 번만 변환한다."""

@@ -36,6 +36,8 @@ class FinishedRecording:
     ended_ms: int
     video: Path
     boxes: Path
+    # 공유 폴더의 파일 이름·날짜 폴더에 쓰는 시각(가까운 분, 첫 파일은 가동 시각이 속한 분). 없으면 started_ms
+    name_ms: int | None = None
 
 
 @dataclass
@@ -84,7 +86,9 @@ class RecordingPublisher:
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
-            self._thread = None
+            # 시간 안에 안 끝났으면 참조를 지우지 않는다(지우면 start()가 스레드를 하나 더 만든다)
+            if not self._thread.is_alive():
+                self._thread = None
 
     def submit(self, recording: FinishedRecording) -> None:
         with self._lock:
@@ -178,8 +182,11 @@ class RecordingPublisher:
     def _move(self, job: _Job) -> bool:
         """영상과 좌표를 공유 폴더로 옮긴다. 둘 다 올라간 뒤에만 로컬 파일을 지운다."""
         recording = job.recording
-        folder = relative_dir(recording.camera_id, recording.started_ms)
-        stem = file_stem(recording.camera_id, recording.started_ms)
+        name_ms = (
+            recording.started_ms if recording.name_ms is None else recording.name_ms
+        )
+        folder = relative_dir(recording.camera_id, name_ms)
+        stem = file_stem(recording.camera_id, name_ms)
         try:
             target = self._media_root / folder
             target.mkdir(parents=True, exist_ok=True)

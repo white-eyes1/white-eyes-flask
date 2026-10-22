@@ -51,6 +51,8 @@ BOX_GRACE_SEC = 10.0
 BOX_BACKLOG_LIMIT = 6000
 # 프레임을 버린 로그는 첫 번째와 이 횟수마다 한 번만 남긴다
 _DROP_LOG_EVERY = 100
+# 좌표 파일을 쓰지 못한 파일을 다시 시도하는 최대 횟수(넘으면 영상은 임시 폴더에 남긴다)
+MAX_BOX_WRITE_ATTEMPTS = 3
 
 
 class Recorder(Protocol):
@@ -93,6 +95,11 @@ class LiveRecorder:
         self._waiting: dict[int, tuple[str, float, float | None, float | None]] = {}
         # 이미 게시기에 넘긴 파일 순번. segment list가 처음부터 다시 쓰여도 두 번 넘기지 않는다
         self._finished: set[int] = set()
+        self._listed: set[int] = set()  # 목록에 오른 적 있는 파일 순번
+        self._box_write_failures: dict[int, int] = {}
+        self._unpublished: set[int] = (
+            set()
+        )  # 좌표 파일을 쓰지 못해 게시하지 못한 파일 순번
         self._collect_lock = threading.Lock()
         self._box_lock = threading.Lock()
         self._boxes: list[tuple[int, list[TrackedBox]]] = []
@@ -306,7 +313,12 @@ class LiveRecorder:
             if not match:
                 continue
             index = int(match.group(1))
-            if index not in self._finished and index not in self._waiting:
+            self._listed.add(index)
+            if (
+                index not in self._finished
+                and index not in self._waiting
+                and index not in self._unpublished
+            ):
                 start_s, end_s = _times(row)
                 self._waiting[index] = (name, self._clock(), start_s, end_s)
 
@@ -336,15 +348,12 @@ class LiveRecorder:
         is_last = self._closing.is_set() and not any(i > index for i in self._waiting)
         with self._box_lock:
             # 이 파일의 시간대 박스만 쓴다. 시작보다 이른 박스는 앞 파일이 이미 나간 뒤 늦게
-            # 도착한 것이라 버리고, 끝보다 늦은 박스는 다음 파일 몫으로 남긴다.
+            # 도착한 것이라 버린다. 박스는 좌표 파일을 쓴 뒤에 지운다(쓰기에 실패하면 다시 시도해야 한다).
             inside = [
                 i
                 for i in self._boxes
                 if i[0] >= started_ms and (is_last or i[0] < window_end_ms)
             ]
-            self._boxes = (
-                [] if is_last else [i for i in self._boxes if i[0] >= window_end_ms]
-            )
         ended_ms = window_end_ms
         if self._closing.is_set():
             # 목록의 끝 시각은 마지막 프레임의 길이와 마무리만큼 더 길다
@@ -360,15 +369,48 @@ class LiveRecorder:
         try:
             write_box_file(box_path, self._settings.analyze_fps, frames)
         except OSError:
-            logger.exception(
-                "좌표 파일을 쓰지 못함 cameraId=%s file=%s", self.camera_id, name
-            )
+            self._box_write_failed(index, name, start_s, end_s)
             return
+        with self._box_lock:
+            # 끝보다 늦은 박스는 다음 파일 몫으로 남긴다
+            self._boxes = (
+                [] if is_last else [i for i in self._boxes if i[0] >= window_end_ms]
+            )
         self._publisher.submit(
-            FinishedRecording(self.camera_id, started_ms, ended_ms, video, box_path)
+            FinishedRecording(
+                self.camera_id,
+                started_ms,
+                ended_ms,
+                video,
+                box_path,
+                name_ms=name_ms,
+            )
         )
         self._finished.add(index)
         logger.info("녹화 파일 완성 cameraId=%s file=%s", self.camera_id, video.name)
+
+    def _box_write_failed(
+        self, index: int, name: str, start_s: float | None, end_s: float | None
+    ) -> None:
+        """좌표 파일을 쓰지 못했다. 영상이 임시 폴더에 묻히지 않게 다음 확인 때 다시 시도한다."""
+        failures = self._box_write_failures.get(index, 0) + 1
+        self._box_write_failures[index] = failures
+        if failures < MAX_BOX_WRITE_ATTEMPTS:
+            logger.warning(
+                "좌표 파일을 쓰지 못해 다시 시도함 cameraId=%s file=%s (%s번째)",
+                self.camera_id,
+                name,
+                failures,
+            )
+            self._waiting[index] = (name, self._clock(), start_s, end_s)
+            return
+        self._unpublished.add(index)
+        logger.exception(
+            "좌표 파일을 %s번 쓰지 못해 게시하지 못함(영상은 임시 폴더에 남음) cameraId=%s file=%s",
+            failures,
+            self.camera_id,
+            name,
+        )
 
     def _window(
         self, index: int, start_s: float | None, end_s: float | None
@@ -415,13 +457,28 @@ class LiveRecorder:
                 proc.wait(timeout=KILL_WAIT_SEC)
 
     def _warn_leftovers(self) -> None:
-        """목록에 오르지 않은 파일은 닫히지 못한 것이라 게시하지 않는다. 남아 있으면 알린다."""
+        """게시하지 못한 파일이 남아 있으면 이유를 구분해 알린다.
+
+        목록에 오르지 않은 파일은 닫히지 못한 것이라 게시하지 않는다(강제 종료 등). 목록에는 올랐는데
+        게시하지 못한 파일은 좌표 파일을 쓰지 못한 것이라 영상은 온전하다.
+        """
         if self._pattern is None:
             return
-        listed = self._finished | set(self._waiting)
+        pending = self._unpublished | set(self._waiting)
         for path in sorted(self._tmp_dir.glob(self._pattern.name.replace("%05d", "*"))):
             match = SEGMENT_NAME.search(path.name)
-            if match and int(match.group(1)) not in listed:
+            if not match:
+                continue
+            index = int(match.group(1))
+            if index in self._finished:
+                continue
+            if index in pending:
+                logger.warning(
+                    "좌표 파일을 쓰지 못해 게시하지 못한 녹화 파일이 남음(영상은 온전함) cameraId=%s file=%s",
+                    self.camera_id,
+                    path.name,
+                )
+            elif index not in self._listed:
                 logger.warning(
                     "닫히지 못한 녹화 파일이 남아 게시하지 않음 cameraId=%s file=%s",
                     self.camera_id,

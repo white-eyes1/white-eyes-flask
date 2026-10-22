@@ -126,3 +126,12 @@ def test_ffmpeg_binary_comes_from_the_settings(tmp_path):
         tmp_path / "l.csv",
     )
     assert command[0] == "/opt/ffmpeg"
+
+
+def test_box_file_frames_are_written_in_time_order(tmp_path: Path):
+    path = tmp_path / "a.json.gz"
+    box = TrackedBox(1, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.9)
+    write_box_file(path, 5, [(0.6, [box]), (0.2, [box]), (0.4, [box])])
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        times = [frame["t"] for frame in json.load(stream)["frames"]]
+    assert times == [0.2, 0.4, 0.6]

@@ -272,3 +272,74 @@ def test_one_failing_job_does_not_block_the_others(media, local, clock, caplog):
         pub.run_due()
     assert [call[0] for call in registrar.calls] == [8]
     assert any("게시 중 예외" in record.message for record in caplog.records)
+
+
+def test_shared_file_name_follows_name_ms_not_started_ms(media, local, clock):
+    registrar = FakeRegistrar()
+    pub = publisher(media, registrar, clock)
+    item = recording(local)
+    named = FinishedRecording(
+        item.camera_id,
+        ms(14, 3, 59) + 200,  # 분 경계보다 0.8초 일찍 시작한 파일
+        ms(14, 5),
+        item.video,
+        item.boxes,
+        name_ms=ms(14, 4),  # 이름은 가까운 분
+    )
+    pub.submit(named)
+    pub.run_due()
+    folder = media / "recordings/live/cam7/20261012"
+    assert (folder / "cam7_20261012_1404.mp4").exists()  # 1403이 아니다
+    assert registrar.calls[0][2].endswith("cam7_20261012_1404.mp4")
+    assert registrar.calls[0][1] == named.started_ms  # startedAt은 그대로
+
+
+def test_date_folder_follows_name_ms_across_midnight(media, local, clock):
+    registrar = FakeRegistrar()
+    pub = publisher(media, registrar, clock)
+    item = recording(local)
+    midnight = int(datetime(2026, 10, 13, 0, 0, 0, tzinfo=KST).timestamp() * 1000)
+    pub.submit(
+        FinishedRecording(
+            7,
+            midnight - 800,
+            midnight + 60_000,
+            item.video,
+            item.boxes,
+            name_ms=midnight,
+        )
+    )
+    pub.run_due()
+    assert (media / "recordings/live/cam7/20261013/cam7_20261013_0000.mp4").exists()
+    assert registrar.calls[0][2] == (
+        "recordings/live/cam7/20261013/cam7_20261013_0000.mp4"
+    )
+
+
+class _StuckThread:
+    """join해도 끝나지 않는 스레드(복사가 걸린 게시기)."""
+
+    def join(self, timeout=None):
+        pass
+
+    def is_alive(self):
+        return True
+
+
+def test_stop_keeps_the_thread_reference_if_it_did_not_end_in_time(media):
+    pub = RecordingPublisher(str(media), FakeRegistrar())
+    stuck = _StuckThread()
+    pub._thread = stuck
+    pub.stop(timeout=0.01)
+    assert pub._thread is stuck  # 참조를 지우지 않는다
+    pub.start()  # 스레드를 하나 더 만들지 않는다
+    assert pub._thread is stuck
+
+
+def test_stop_clears_the_thread_reference_once_it_has_ended(media):
+    pub = RecordingPublisher(str(media), FakeRegistrar())
+    pub.start()
+    pub.stop(timeout=5)
+    assert pub._thread is None
+    pub.start()  # 끝난 뒤에는 다시 시작할 수 있다
+    pub.stop(timeout=5)

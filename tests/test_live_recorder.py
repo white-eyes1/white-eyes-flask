@@ -14,8 +14,10 @@ import pytest
 
 from white_eyes_flask.analysis.result import TrackedBox
 from white_eyes_flask.camera.kst import KST
+from white_eyes_flask.camera.recording_registrar import RegisterResult
 from white_eyes_flask.recording import recorder as recorder_module
 from white_eyes_flask.recording.ffmpeg import RecorderSettings
+from white_eyes_flask.recording.publisher import RecordingPublisher
 from white_eyes_flask.recording.recorder import (
     LiveRecorder,
     RecorderFailed,
@@ -633,3 +635,112 @@ def test_unreadable_times_in_the_segment_list_fall_back_to_minute_boundaries(har
     assert first.ended_ms == int(at(14, 4) * 1000)
     assert len(read_boxes(first.boxes)["frames"]) == 1
     rec.close()
+
+
+class _Registrar:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def register(self, camera_id, started_ms, video_path, box_path, ended_ms=None):
+        self.calls.append((video_path, box_path))
+        return RegisterResult.OK
+
+
+def _with_real_publisher(harness, tmp_path):
+    registrar = _Registrar()
+    publisher = RecordingPublisher(str(tmp_path / "media"), registrar)
+    harness.recorder._publisher = publisher
+    return publisher, registrar
+
+
+def test_final_shared_paths_after_a_cut_before_the_boundary(tmp_path):
+    # 첫 파일이 분 경계보다 0.8초 일찍 끊긴 경우: 둘째 파일은 14:04 이름이어야 하고 _2가 생기지 않는다
+    harness = Harness(tmp_path)
+    publisher, registrar = _with_real_publisher(harness, tmp_path)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 57))
+    rec.write_frame(FRAME, at(14, 4, 5))
+    harness.proc.finish(0, 0.0, 2.2)
+    rec.poll_segments()
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(1, 2.2, 8.3)
+    rec.close()
+    publisher.run_due()
+    folder = tmp_path / "media/recordings/live/cam7/20261012"
+    names = sorted(p.name for p in folder.iterdir())
+    assert names == [
+        "cam7_20261012_1403.json.gz",
+        "cam7_20261012_1403.mp4",
+        "cam7_20261012_1404.json.gz",
+        "cam7_20261012_1404.mp4",
+    ]
+    assert [video for video, _ in registrar.calls] == [
+        "recordings/live/cam7/20261012/cam7_20261012_1403.mp4",
+        "recordings/live/cam7/20261012/cam7_20261012_1404.mp4",
+    ]
+
+
+def test_final_shared_paths_just_before_midnight(tmp_path):
+    # 23:59:58에 시작해 23:59:59.2에 끊기면 둘째 파일은 다음 날 00:00 이름과 폴더다
+    harness = Harness(tmp_path)
+    publisher, registrar = _with_real_publisher(harness, tmp_path)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(23, 59, 58))
+    rec.write_frame(FRAME, at(23, 59, 59.5))
+    harness.proc.finish(0, 0.0, 1.2)
+    rec.poll_segments()
+    harness.proc.stdin.on_close = lambda: harness.proc.finish(1, 1.2, 3.0)
+    rec.close()
+    publisher.run_due()
+    videos = [video for video, _ in registrar.calls]
+    assert videos == [
+        "recordings/live/cam7/20261012/cam7_20261012_2359.mp4",
+        "recordings/live/cam7/20261013/cam7_20261013_0000.mp4",
+    ]
+
+
+def test_a_failed_box_file_write_is_retried_and_the_video_is_not_lost(
+    harness, monkeypatch
+):
+    real = recorder_module.write_box_file
+    calls = []
+
+    def flaky(path, fps, frames):
+        calls.append(len(frames))
+        if len(calls) == 1:
+            raise OSError("disk full")
+        return real(path, fps, frames)
+
+    monkeypatch.setattr(recorder_module, "write_box_file", flaky)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    rec.add_boxes(at(14, 3, 55), [box(1)])
+    harness.proc.finish(0, 0.0, 10.0)
+    rec.poll_segments()
+    assert harness.publisher.items == []  # 첫 쓰기 실패
+    rec.poll_segments()  # 다음 확인 때 다시 시도한다
+    (item,) = harness.publisher.items
+    assert calls == [1, 1]  # 박스가 그대로 남아 있어 두 번째에도 같은 박스를 쓴다
+    assert [f["b"][0][0] for f in read_boxes(item.boxes)["frames"]] == [1]
+    rec.close()
+
+
+def test_gives_up_after_repeated_box_file_failures_and_says_why(
+    harness, monkeypatch, caplog
+):
+    def always_fail(path, fps, frames):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recorder_module, "write_box_file", always_fail)
+    rec = harness.recorder
+    rec.write_frame(FRAME, at(14, 3, 50))
+    harness.proc.finish(0, 0.0, 10.0)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(recorder_module.MAX_BOX_WRITE_ATTEMPTS + 2):
+            rec.poll_segments()
+        rec.close()
+    assert harness.publisher.items == []
+    messages = [record.message for record in caplog.records]
+    assert any("번 쓰지 못해 게시하지 못함" in m for m in messages)
+    # 닫히지 못한 파일과 구분된 문구
+    assert any("좌표 파일을 쓰지 못해 게시하지 못한 녹화 파일" in m for m in messages)
+    assert not any("닫히지 못한 녹화 파일" in m for m in messages)

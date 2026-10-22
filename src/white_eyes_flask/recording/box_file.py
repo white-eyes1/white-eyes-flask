@@ -24,12 +24,14 @@ def write_box_file(
     path: Path, fps: int, frames: list[tuple[float, list[TrackedBox]]]
 ) -> None:
     """frames는 (그 분 파일 시작부터의 초, 박스 목록). 임시 이름에 쓴 뒤 올려 반쪽 파일을 남기지 않는다."""
+    # 박스가 거꾸로 도착해도 다시보기가 "t ≤ 재생 위치인 마지막 프레임"을 찾을 수 있게 t 순서로 쓴다
+    ordered = sorted(frames, key=lambda frame: frame[0])
     body = {
         "version": BOX_FILE_VERSION,
         "fps": fps,
         "frames": [
             {"t": round(max(0.0, t), _DIGITS), "b": [_row(box) for box in boxes]}
-            for t, boxes in frames
+            for t, boxes in ordered
         ],
     }
     temp = path.with_name(path.name + ".tmp")

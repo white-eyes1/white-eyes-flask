@@ -48,13 +48,18 @@ def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
 
 
 def build_player(
-    config: Config, cache: DummyCache, result_queue: ResultQueue
+    config: Config,
+    cache: DummyCache,
+    result_queue: ResultQueue,
+    streams: StreamService | None = None,
 ) -> DummyPlayer:
     return DummyPlayer(
         cache,
         RecordingRegistrar(config.admin_internal_base_url, config.internal_token),
         result_queue,
         StatusReporter(config.admin_internal_base_url, config.internal_token),
+        streams=streams,
+        preview_fps=config.analyze_fps,
     )
 
 
@@ -96,7 +101,7 @@ def create_app(
     app.extensions["camera_service"] = CameraService(
         config.media_root,
         preparer or build_preparer(config, cache),
-        player or build_player(config, cache, result_queue),
+        player or build_player(config, cache, result_queue, stream_service),
         stream_service,
     )
     app.register_blueprint(camera_bp)

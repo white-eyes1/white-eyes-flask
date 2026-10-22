@@ -77,8 +77,8 @@ def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
     class FakeApp:
         extensions = {"result_sender": sender, "camera_service": object()}
 
-        def run(self, host, port):
-            events.append(("run", host, port))
+        def run(self, host, port, use_reloader=True):
+            events.append(("run", host, port, use_reloader))
             raise KeyboardInterrupt  # 서버가 Ctrl+C로 끝난다
 
     monkeypatch.setattr(white_eyes_flask, "load_dotenv", lambda: None)
@@ -95,7 +95,7 @@ def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
     # 서버를 켜기 전에 복구를 시작하고(FNC-S-012), 끝나면 멈춘다
     assert events == [
         "recovery start",
-        ("run", "127.0.0.1", 5001),
+        ("run", "127.0.0.1", 5001, False),
         "recovery stop",
     ]
     assert sender.stopped == 1

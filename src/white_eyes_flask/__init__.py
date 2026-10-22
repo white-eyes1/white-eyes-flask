@@ -14,7 +14,8 @@ def main() -> None:
     recovery = build_restart_recovery(config, app.extensions["camera_service"])
     recovery.start()
     try:
-        app.run(host=config.host, port=config.port)
+        # 리로더가 main()을 한 번 더 실행하면 복구·전송 스레드가 둘이 되므로 끈다.
+        app.run(host=config.host, port=config.port, use_reloader=False)
     finally:
         recovery.stop()
         # 끝나기 전에 아직 못 보낸 1초 결과를 한 번 더 보내 본다

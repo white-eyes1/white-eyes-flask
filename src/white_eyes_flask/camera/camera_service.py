@@ -125,6 +125,13 @@ class CameraService:
             del self._stopping[camera_id]
             return False
 
+    def current_status(self, camera_id: int) -> CameraStatus | None:
+        """작업 스레드가 살아 있는 캠의 지금 상태. 작업이 없거나 끝났으면 None."""
+        job = self._get_job(camera_id)
+        if job is None or not job.is_alive():
+            return None
+        return job.status
+
     def job_count(self) -> int:
         with self._lock:
             return sum(1 for job in self._jobs.values() if job.is_alive())

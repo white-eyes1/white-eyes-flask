@@ -10,17 +10,24 @@ import pytest
 
 from white_eyes_flask.camera.camera_service import CameraService, CameraStoppingError
 from white_eyes_flask.camera.restart_recovery import DesiredClient, RestartRecovery
+from white_eyes_flask.camera.status_reporter import ReportResult
 
 TOKEN = "test-token"
 
 
 class FakeReporter:
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
+    """send를 부를 때마다 results에서 결과를 하나씩 꺼낸다(다 쓰면 OK)."""
 
-    def report(self, camera_id, status, progress=None, error_message=None) -> bool:
+    def __init__(self, *results) -> None:
+        self.calls: list[tuple] = []
+        self.results = list(results)
+
+    def send(self, camera_id, status, progress=None, error_message=None):
         self.calls.append((camera_id, status, error_message))
-        return True
+        result = self.results.pop(0) if self.results else ReportResult.OK
+        if isinstance(result, Exception):
+            raise result
+        return result, "" if result == ReportResult.OK else "HTTP Error 500"
 
 
 class FakeClient:
@@ -97,7 +104,9 @@ def test_live_camera_is_skipped_and_next_camera_still_starts(service, caplog):
     with caplog.at_level("WARNING"):
         make(FakeClient(), service, reporter).recover([live, dummy(1)])
     assert service.job_count() == 1
-    assert [c[0] for c in reporter.calls] == [1]
+    # 건너뛴 LIVE 캠은 관리자 화면이 옛 상태로 남지 않게 ERROR와 이유를 알린다
+    assert (5, "ERROR", "지원하지 않는 영상 종류") in reporter.calls
+    assert (1, "PREPARING", None) in reporter.calls
     assert "cameraId=5" in caplog.text
 
 
@@ -135,6 +144,9 @@ def test_exception_from_one_camera_does_not_stop_others():
             if camera_id == 1:
                 raise RuntimeError("boom")
             self.started.append(camera_id)
+            return "RUNNING"
+
+        def current_status(self, camera_id):
             return "RUNNING"
 
     boom = Boom()
@@ -243,50 +255,115 @@ def test_client_log_never_contains_token(stub, caplog):
     assert "토큰 설정" in caplog.text
 
 
+class StubService:
+    """CameraService 흉내. start가 돌려줄 값과 지금 상태(current)를 시험이 바꾼다."""
+
+    def __init__(self, start_results=("PREPARING",)) -> None:
+        self.start_results = list(start_results)
+        self.calls = 0
+        self.current = "PREPARING"
+
+    def start(self, camera_id, source_type, source_uri):
+        self.calls += 1
+        result = self.start_results.pop(0) if self.start_results else "PREPARING"
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def current_status(self, camera_id):
+        return self.current
+
+
 def test_camera_still_stopping_is_retried_until_it_can_start():
-    class Service:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def start(self, camera_id, source_type, source_uri):
-            self.calls += 1
-            if self.calls < 3:
-                raise CameraStoppingError(camera_id)
-            return "PREPARING"
-
-    service, reporter = Service(), FakeReporter()
+    stopping = CameraStoppingError(1)
+    service = StubService([stopping, stopping, "PREPARING"])
+    reporter = FakeReporter()
     make(FakeClient([dummy(1)]), service, reporter, retry_interval=0.01).run()
     assert service.calls == 3
     assert reporter.calls == [(1, "PREPARING", None)]
 
 
-def test_failed_status_report_is_sent_again_without_restarting_the_camera(service):
-    class FlakyReporter(FakeReporter):
-        def report(self, camera_id, status, progress=None, error_message=None):
-            super().report(camera_id, status, progress, error_message)
-            return len(self.calls) >= 3  # 두 번 실패하고 세 번째에 성공
-
-    reporter = FlakyReporter()
-    first_job = None
-    recovery = make(FakeClient([dummy(1)]), service, reporter, retry_interval=0.01)
-    recovery.run()
+def test_failed_status_report_is_sent_again_without_restarting_the_camera():
+    service = StubService()
+    reporter = FakeReporter(ReportResult.RETRY, ReportResult.RETRY, ReportResult.OK)
+    make(FakeClient([dummy(1)]), service, reporter, retry_interval=0.01).run()
     assert reporter.calls == [(1, "PREPARING", None)] * 3
-    assert service.job_count() == 1  # 시작은 한 번뿐
-    assert first_job is None
+    assert service.calls == 1  # 시작은 한 번뿐
 
 
 def test_report_exception_is_retried_too():
-    class Raising(FakeReporter):
-        def report(self, camera_id, status, progress=None, error_message=None):
-            super().report(camera_id, status, progress, error_message)
-            if len(self.calls) < 2:
-                raise RuntimeError("boom")
-            return True
-
-    class Service:
-        def start(self, camera_id, source_type, source_uri):
-            return "RUNNING"
-
-    reporter = Raising()
-    make(FakeClient([dummy(1)]), Service(), reporter, retry_interval=0.01).run()
+    reporter = FakeReporter(RuntimeError("boom"), ReportResult.OK)
+    make(FakeClient([dummy(1)]), StubService(), reporter, retry_interval=0.01).run()
     assert len(reporter.calls) == 2
+
+
+def test_rejected_report_is_dropped_once_and_never_repeated(caplog):
+    # 관리자가 그 사이 캠을 삭제하면 404로 거절된다. 다시 보내도 소용없다.
+    reporter = FakeReporter(ReportResult.REJECTED)
+    recovery = make(
+        FakeClient([dummy(1)]), StubService(), reporter, retry_interval=0.01
+    )
+    with caplog.at_level("ERROR"):
+        recovery.run()
+    assert len(reporter.calls) == 1
+    assert "거절돼 버림" in caplog.text
+    assert "ADMIN_INTERNAL_BASE_URL" in caplog.text
+
+
+def test_rejected_error_report_is_dropped_too(service):
+    reporter = FakeReporter(ReportResult.REJECTED)
+    missing = dummy(3, "nope.mp4")
+    make(FakeClient([missing]), service, reporter, retry_interval=0.01).run()
+    assert reporter.calls == [(3, "ERROR", "영상 파일을 찾을 수 없음")]
+
+
+def test_retry_sends_the_current_status_not_the_stored_one():
+    service = StubService()
+    reporter = FakeReporter(ReportResult.RETRY, ReportResult.OK)
+
+    class Flip(FakeReporter):
+        def send(self, *args, **kwargs):
+            out = super().send(*args, **kwargs)
+            service.current = "RUNNING"  # 첫 보고 실패 뒤 준비가 끝났다
+            return out
+
+    flip = Flip(ReportResult.RETRY, ReportResult.OK)
+    make(FakeClient([dummy(1)]), service, flip, retry_interval=0.01).run()
+    assert flip.calls == [(1, "PREPARING", None), (1, "RUNNING", None)]
+    assert reporter.calls == []
+
+
+def test_retry_is_dropped_if_the_camera_was_stopped_meanwhile():
+    service = StubService()
+    reporter = FakeReporter(ReportResult.RETRY, ReportResult.OK)
+
+    class StopAfterFirst(FakeReporter):
+        def send(self, *args, **kwargs):
+            out = super().send(*args, **kwargs)
+            service.current = None  # 관리자가 정지해 캠 작업이 사라졌다
+            return out
+
+    stopper = StopAfterFirst(ReportResult.RETRY, ReportResult.OK)
+    make(FakeClient([dummy(1)]), service, stopper, retry_interval=0.01).run()
+    assert stopper.calls == [
+        (1, "PREPARING", None)
+    ]  # 정지된 캠의 PREPARING을 다시 보내지 않는다
+    assert reporter.calls == []
+
+
+def test_repeated_report_failures_are_logged_only_now_and_then(caplog):
+    results = [ReportResult.RETRY] * 40 + [ReportResult.OK]
+    reporter = FakeReporter(*results)
+    with caplog.at_level("WARNING"):
+        make(FakeClient([dummy(1)]), StubService(), reporter, retry_interval=0).run()
+    assert len(reporter.calls) == 41
+    warnings = [r for r in caplog.records if "상태 보고 실패" in r.getMessage()]
+    assert len(warnings) == 2  # 처음과 30번째
+
+
+def test_real_camera_service_current_status(service):
+    assert service.current_status(1) is None
+    service.start(1, "DUMMY", "dummy/videos/a.mp4")
+    assert str(service.current_status(1)) in ("PREPARING", "RUNNING")
+    service.stop(1)
+    assert service.current_status(1) is None

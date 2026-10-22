@@ -14,6 +14,7 @@ from white_eyes_flask.camera.camera_service import (
     SourceNotFoundError,
     SourceTypeNotSupportedError,
 )
+from white_eyes_flask.camera.status_reporter import ReportResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ RETRY_INTERVAL_SEC = 10
 SHUTDOWN_JOIN_SEC = 2.0
 _LOG_EVERY = 30
 ERROR_SOURCE_NOT_FOUND = "영상 파일을 찾을 수 없음"
+ERROR_SOURCE_TYPE = "지원하지 않는 영상 종류"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -79,6 +81,8 @@ class DesiredClient:
 class Starter(Protocol):
     def start(self, camera_id: int, source_type: str, source_uri: str) -> str: ...
 
+    def current_status(self, camera_id: int) -> str | None: ...
+
 
 class RestartRecovery:
     """서버가 켜질 때 가동 대상 캠을 받아 FNC-S-001과 같은 방식(CameraService.start)으로 시작한다.
@@ -86,6 +90,10 @@ class RestartRecovery:
     관리자 앱에 닿지 못하면 retry_interval마다 계속 다시 시도한다. 서버 시작을 막지 않게
     백그라운드 스레드에서 돈다. 이미 가동 중인 캠은 CameraService.start가 현재 상태만
     돌려주므로 중복으로 시작되지 않는다. 한 캠이 실패해도 다음 캠을 계속 처리한다.
+
+    다시 시도하는 일은 두 가지다. 정지가 끝나지 않아 못 시작한 캠, 상태 보고에 실패한 캠.
+    보고는 다시 보낼 때 저장해 둔 값이 아니라 그때의 캠 상태를 보내고, 그 사이 캠 작업이
+    없어졌으면(관리자가 정지) 버린다. 관리자 앱이 400·404로 거절한 보고도 버린다.
     """
 
     def __init__(
@@ -128,75 +136,105 @@ class RestartRecovery:
     def recover(self, desired: list[Any]) -> list[Any]:
         """목록의 캠을 시작하고, 나중에 다시 해야 할 일(정지 중이라 못 시작, 상태 보고 실패)을 돌려준다."""
         retry: list[Any] = []
-        started = 0
         for item in desired:
             if self._stop.is_set():
                 return []
-            outcome = self._process(item)
-            if outcome is True:
-                started += 1
-            elif outcome is not False:
-                retry.append(outcome)
-        logger.info(
-            "재시작 복구 대상=%s건 시작=%s건 다시 시도=%s건",
-            len(desired),
-            started,
-            len(retry),
-        )
+            again = self._process(item)
+            if again is not None:
+                retry.append(again)
+        logger.info("재시작 복구 대상=%s건 다시 시도=%s건", len(desired), len(retry))
         return retry
 
-    def _process(self, item: Any) -> "bool | _ReportAgain | dict":
-        """True=시작함, False=건너뜀(다시 해도 소용없음), 그 밖=다시 시도할 일."""
+    def _process(self, item: Any) -> "_ReportAgain | dict | None":
+        """다시 시도할 일을 돌려준다. 끝났거나 다시 해도 소용없으면 None."""
         if isinstance(item, _ReportAgain):
-            return True if self._report(item) else item
+            return self._deliver(item)
         parsed = _parse(item)
         if parsed is None:
             logger.error("가동 대상 항목 형식이 올바르지 않아 건너뜀: %r", item)
-            return False
+            return None
         camera_id, source_type, source_uri = parsed
         try:
-            status = self._service.start(camera_id, source_type, source_uri)
+            self._service.start(camera_id, source_type, source_uri)
         except SourceTypeNotSupportedError:
             # LIVE는 라이브 분석(FNC-S-007) 구현 전까지 시작할 수 없다. 서버는 계속 뜬다.
+            # 관리자 화면이 옛 상태(RUNNING)로 남지 않게 ERROR로 알린다.
             logger.warning(
                 "복구할 수 없는 영상 종류라 건너뜀 cameraId=%s sourceType=%s",
                 camera_id,
                 source_type,
             )
-            return False
+            return self._deliver(
+                _ReportAgain(camera_id, ERROR_SOURCE_TYPE, follow_job=False)
+            )
         except SourceNotFoundError:
             logger.error("복구할 영상 파일이 없음 cameraId=%s", camera_id)
-            report = _ReportAgain(camera_id, "ERROR", ERROR_SOURCE_NOT_FOUND)
-            return False if self._report(report) else report
+            return self._deliver(
+                _ReportAgain(camera_id, ERROR_SOURCE_NOT_FOUND, follow_job=False)
+            )
         except CameraStoppingError:
             # 정지가 끝나면 시작할 수 있다. 같은 항목을 다음 차례에 다시 시도한다.
             logger.warning("정지가 끝나지 않아 나중에 다시 시도 cameraId=%s", camera_id)
             return item
         except Exception:
             logger.exception("캠 복구 중 예외 cameraId=%s", camera_id)
-            return False
-        report = _ReportAgain(camera_id, str(status), None)
-        return True if self._report(report) else report
+            return None
+        return self._deliver(_ReportAgain(camera_id, None, follow_job=True))
 
-    def _report(self, report: "_ReportAgain") -> bool:
-        try:
-            return bool(
-                self._reporter.report(
-                    report.camera_id, report.status, error_message=report.error_message
+    def _deliver(self, report: "_ReportAgain") -> "_ReportAgain | None":
+        """상태를 보고한다. 성공하거나 버리면 None, 다시 보낼 만하면 report를 돌려준다."""
+        if report.follow_job:
+            # 시작 뒤 지금까지 상태가 바뀌었거나 관리자가 정지했을 수 있어 그때의 상태를 보낸다.
+            current = self._service.current_status(report.camera_id)
+            if current is None:
+                logger.info(
+                    "캠 작업이 이미 없어 상태 보고를 버림 cameraId=%s", report.camera_id
                 )
+                return None
+            status, message = str(current), None
+        else:
+            status, message = "ERROR", report.error_message
+        try:
+            result, detail = self._reporter.send(
+                report.camera_id, status, error_message=message
             )
-        except Exception:
-            logger.warning("상태 보고 중 오류 cameraId=%s", report.camera_id)
-            return False
+        except Exception as error:
+            result, detail = ReportResult.RETRY, f"예외: {error}"
+        if result == ReportResult.OK:
+            return None
+        if result == ReportResult.REJECTED:
+            logger.error(
+                "상태 보고가 거절돼 버림 cameraId=%s status=%s: %s "
+                "(캠이 삭제됐거나 ADMIN_INTERNAL_BASE_URL의 포트·/admin 경로가 틀렸을 수 있음)",
+                report.camera_id,
+                status,
+                detail,
+            )
+            return None
+        report.failures += 1
+        if report.failures == 1 or report.failures % _LOG_EVERY == 0:
+            logger.warning(
+                "상태 보고 실패 cameraId=%s status=%s: %s (연속 %s번째)",
+                report.camera_id,
+                status,
+                detail,
+                report.failures,
+            )
+        return report
 
 
-@dataclass(frozen=True)
+@dataclass
 class _ReportAgain:
-    """캠은 이미 시작했는데 상태 보고가 실패해 다시 보내야 하는 일."""
+    """관리자 앱에 알려야 하는 캠 상태.
+
+    follow_job이면 보낼 때마다 캠 작업의 지금 상태(RUNNING·PREPARING)를 보내고, 작업이 없으면
+    버린다. 아니면 시작하지 못한 캠이라 ERROR와 error_message를 그대로 보낸다.
+    """
 
     camera_id: int
-    status: str
     error_message: str | None
+    follow_job: bool
+    failures: int = 0
 
 
 def _parse(item: Any) -> tuple[int, str, str] | None:

@@ -29,6 +29,10 @@ MAX_FAILURES = 3
 # 이 프레임 수 이내의 앞쪽 이동은 시크하지 않고 건너뛰며 읽는다(긴 GOP 영상에서 시크가 느리고 부정확하다)
 MAX_FORWARD_SKIP = 90
 JOIN_SEC = 2.0
+IDLE_CLOSE_SEC = (
+    30.0  # 이만큼 아무도 안 보면 영상 파일을 닫는다(다시 보면 열고 시크한다)
+)
+END_SLACK_FRAMES = 3  # 영상 끝에서 이 프레임 수 이내의 읽기 실패는 끝으로 보고 마지막 프레임을 다시 쓴다
 
 
 class PreviewUnavailable(Exception):
@@ -56,11 +60,15 @@ class VideoFrames:
             return self._last_frame  # 영상 fps보다 자주 요청하면 같은 프레임이다
         ok, frame = self._read(capture, index)
         if not ok or frame is None:
+            if self._last_frame is not None and self._near_end(index):
+                # 메타 프레임 수가 실제보다 크면 마지막 프레임이 안 읽힐 수 있다. 끝으로 보고 직전 프레임을 쓴다
+                return self._last_frame
             self._last_index = None
             self._last_frame = None
             raise PreviewUnavailable(f"영상 프레임을 읽을 수 없음: {self._path.name}")
-        # 시크가 거절되거나 부정확했을 수 있어 읽은 뒤의 실제 위치로 다음 건너뛰기를 계산한다
-        self._last_index = self._actual_index(capture, index)
+        # OpenCV는 시크한 뒤 프레임을 정확히 맞춰 읽는다(실제 드론 영상 6개의 무작위 30위치에서 모두 일치함을 확인).
+        # 읽은 뒤 CAP_PROP_POS_FRAMES는 "요청한 번호 + 읽은 수"라 실제 디코드 위치를 알려 주지 못하므로 믿지 않는다.
+        self._last_index = index
         self._last_frame = frame
         return frame
 
@@ -71,14 +79,8 @@ class VideoFrames:
             self._last_index = None
             self._last_frame = None
 
-    def _actual_index(self, capture, requested: int) -> int:
-        try:
-            actual = int(capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1  # 방금 읽은 프레임
-        except (ValueError, TypeError, OverflowError):
-            return requested
-        return (
-            actual if 0 <= actual <= max(requested + MAX_FORWARD_SKIP, 0) else requested
-        )
+    def _near_end(self, index: int) -> bool:
+        return self._total <= 0 or index >= self._total - END_SLACK_FRAMES
 
     def _ensure_open(self):
         if self._capture is not None:
@@ -191,8 +193,10 @@ class DummyPreview:
         stop: threading.Event,
         clock: Callable[[], float] = time.monotonic,
         opener: Callable[[str], Any] = cv2.VideoCapture,
+        idle_close_sec: float = IDLE_CLOSE_SEC,
     ) -> None:
         self._stream = stream
+        self._idle_close_sec = idle_close_sec
         self._seconds = seconds
         self._position = position
         self._interval = 1.0 / max(1, fps)
@@ -219,7 +223,11 @@ class DummyPreview:
         if self._thread is not None:
             self._thread.join(JOIN_SEC)
             if self._thread.is_alive():
-                logger.warning("미리보기 스레드가 %s초 안에 끝나지 않음", JOIN_SEC)
+                logger.warning(
+                    "미리보기 스레드가 %s초 안에 끝나지 않음 name=%s",
+                    JOIN_SEC,
+                    self._thread.name,
+                )
 
     def step(self) -> bool:
         """지금 영상 위치의 프레임을 만들어 넘긴다. 넘겼으면 True."""
@@ -246,17 +254,25 @@ class DummyPreview:
 
     def _run(self) -> None:
         next_at = time.monotonic()
+        idle_since: float | None = None
         try:
             while not self._halted():
                 delay = IDLE_POLL_SEC
                 try:
                     if self._stream.wants_frames():
+                        idle_since = None
                         self.step()
                         # 만드는 데 걸린 시간만큼 줄여서 초당 fps번을 지킨다(밀렸으면 지금부터 다시 센다)
                         next_at = max(next_at + self._interval, time.monotonic())
                         delay = max(0.0, next_at - time.monotonic())
                     else:
                         next_at = time.monotonic()
+                        now = time.monotonic()
+                        if idle_since is None:
+                            idle_since = now
+                        elif now - idle_since >= self._idle_close_sec:
+                            self._video.close()  # 오래 안 보면 파일·디코더를 놓는다. 다시 보면 새로 연다
+                            idle_since = now
                 except Exception:
                     logger.exception("미리보기 프레임을 만드는 중 예외")
                     delay = FAILURE_COOLDOWN_SEC
@@ -274,3 +290,9 @@ class DummyPreview:
             # 캡처가 고장 났을 수 있어 닫아 두고 다음에 새로 연다.
             self._video.close()
             self._rest_until = self._clock() + FAILURE_COOLDOWN_SEC
+            logger.warning(
+                "미리보기를 %s초 쉼(연속 %s번 실패): %s",
+                FAILURE_COOLDOWN_SEC,
+                self._failures,
+                error,
+            )

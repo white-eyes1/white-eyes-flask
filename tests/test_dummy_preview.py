@@ -650,36 +650,6 @@ def test_a_row_that_is_not_a_list_is_skipped():
     )
 
 
-def test_after_a_seek_the_real_position_is_used_for_the_next_skip():
-    capture = FakeCapture(total=1000)
-    original_set = capture.set
-
-    def lazy_seek(prop, value):  # 시크를 받아들였지만 실제로는 20프레임 앞에 있다
-        original_set(prop, value)
-        capture.position = int(value) + 20
-        return True
-
-    capture.set = lazy_seek
-    frames = frames_with(capture)
-    frames.frame_at(5.0)  # 프레임 50을 요청했지만 70을 읽었다
-    assert frames._last_index == 70  # 요청한 50이 아니라 실제 위치를 기억한다
-
-
-def test_a_capture_that_fails_to_report_its_position_falls_back_to_the_request():
-    capture = FakeCapture()
-    real_get = capture.get
-
-    def get(prop):
-        if prop == cv2.CAP_PROP_POS_FRAMES:
-            raise ValueError("no position")
-        return real_get(prop)
-
-    capture.get = get
-    frames = frames_with(capture)
-    frames.frame_at(1.0)
-    assert frames._last_index == 10
-
-
 def test_a_failed_open_releases_the_capture_even_if_info_cannot_be_read():
     capture = FakeCapture()
     capture.get = lambda prop: (_ for _ in ()).throw(RuntimeError("backend error"))
@@ -776,3 +746,71 @@ def test_the_frame_rate_is_kept_even_if_making_a_frame_takes_time(tmp_path, vide
     preview.shutdown()
     # 처리 시간을 더해 기다렸다면 초당 약 7번(1.2초에 8~9번)이다. 보정하면 약 12번
     assert len(calls) >= 10
+
+
+def test_a_failed_read_near_the_end_reuses_the_last_frame():
+    """메타 프레임 수가 실제보다 크면 마지막 프레임이 안 읽힌다. 끝에서 멈추지 않고 직전 프레임을 쓴다."""
+    capture = FakeCapture(total=100)
+    frames = frames_with(capture)
+    last = frames.frame_at(9.8)  # 98번 프레임은 읽힌다
+    real_read = capture.read
+    capture.read = lambda: (False, None)  # 99번은 실제로는 없다
+    assert frames.frame_at(9.9) is last
+    capture.read = real_read
+
+
+def test_a_failed_read_far_from_the_end_is_still_an_error():
+    capture = FakeCapture(total=100)
+    frames = frames_with(capture)
+    frames.frame_at(1.0)
+    capture.read = lambda: (False, None)
+    with pytest.raises(PreviewUnavailable):
+        frames.frame_at(5.0)  # 끝이 아닌 곳의 실패는 진짜 문제다
+
+
+def test_the_video_is_closed_when_nobody_watches_and_opened_again_when_watched(
+    tmp_path,
+):
+    opened = []
+
+    def opener(path):
+        capture = FakeCapture()
+        opened.append(capture)
+        return capture
+
+    stream = StreamService().open(7)
+    preview = DummyPreview(
+        stream,
+        Path("clip.mp4"),
+        tmp_path / "none.json.gz",
+        seconds_for([1]),
+        FixedPosition(0.5),
+        fps=100,
+        stop=threading.Event(),
+        opener=opener,
+        idle_close_sec=0.2,
+    )
+    stream.snapshot_jpeg()  # 요청이 있어 프레임을 만든다
+    run_preview(preview)
+    try:
+        assert wait_until(lambda: len(opened) == 1)
+        # 요청이 10초를 지나야 wants_frames가 꺼지므로 시청자 없이 시간이 흐른 상황을 직접 만든다
+        stream._last_snapshot_request = time.monotonic() - 3600
+        assert wait_until(
+            lambda: opened[0].released, timeout=3.0
+        )  # 안 보는 동안 닫았다
+        stream.snapshot_jpeg()  # 다시 본다
+        assert wait_until(lambda: len(opened) == 2, timeout=3.0)  # 새로 열었다
+    finally:
+        preview.shutdown()
+
+
+def test_resting_after_repeated_failures_is_logged(tmp_path, caplog):
+    clock = Clock()
+    preview, _, _ = make_preview(
+        tmp_path, tmp_path / "missing.avi", position=1.0, clock=clock
+    )
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            preview.step()
+    assert any("초 쉼" in record.message for record in caplog.records)

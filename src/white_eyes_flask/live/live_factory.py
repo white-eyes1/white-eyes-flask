@@ -33,7 +33,9 @@ class LiveFactory:
         conf_thres: float,
         edge_margin: float,
         capture_factory: Callable[[str], Any] = open_capture,
+        reconnect_fail_sec: float | None = None,
     ) -> None:
+        self._reconnect_fail_sec = reconnect_fail_sec
         self._detector_provider = detector_provider
         self._sink = sink
         self._reporter = reporter
@@ -57,5 +59,6 @@ class LiveFactory:
             conf_thres=self._conf_thres,
             edge_margin=self._edge_margin,
             capture_factory=self._capture_factory,
+            reconnect_fail_sec=self._reconnect_fail_sec,
         )
         return player, recorder

@@ -95,7 +95,7 @@ class _LatestFrame:
 class LivePlayer:
     """LIVE 캠 하나의 읽기·재연결·분석 연결. 캠 작업마다 하나 만들어 CameraJob에 넘긴다.
 
-    상태: 시작할 때 RUNNING. 연결이 LIVE_RECONNECT_FAIL_SEC(30초)를 넘게 끊겨 있으면 ERROR를
+    상태: 시작할 때 RUNNING. 연결이 LIVE_RECONNECT_FAIL_SEC(기본 30초)를 넘게 끊겨 있으면 ERROR를
     보고하고 on_status로 작업 상태도 ERROR로 바꾼다. 그 뒤에도 30초 간격으로 계속 다시
     연결하고, 프레임을 다시 읽으면 RUNNING으로 돌아와 보고한다.
     녹화기를 못 쓰거나 녹화 중 죽으면(RecorderUnavailable·RecorderFailed) ERROR를 보고하고 끝낸다.
@@ -115,7 +115,14 @@ class LivePlayer:
         capture_factory: Callable[[str], Any] = open_capture,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
+        reconnect_fail_sec: float | None = None,
     ) -> None:
+        # 설정값(LIVE_RECONNECT_FAIL_SEC). 주지 않으면 명세 기본값
+        self._reconnect_fail_sec = (
+            LIVE_RECONNECT_FAIL_SEC
+            if reconnect_fail_sec is None
+            else reconnect_fail_sec
+        )
         self._detector_provider = detector_provider
         self._sink = sink
         self._reporter = reporter
@@ -245,7 +252,7 @@ class LivePlayer:
                         shown,
                         attempts,
                     )
-                if not failed and self._clock() - last_good >= LIVE_RECONNECT_FAIL_SEC:
+                if not failed and self._clock() - last_good >= self._reconnect_fail_sec:
                     failed = True
                     self._set_status(camera_id, "ERROR", ERROR_STREAM)
                 stop.wait(

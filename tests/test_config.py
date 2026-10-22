@@ -63,6 +63,18 @@ def test_record_settings_can_be_set_from_the_environment(monkeypatch):
     assert config.ffmpeg_bin == "/opt/ffmpeg"
 
 
+def test_live_reconnect_fail_sec_defaults_to_30_and_can_be_set(monkeypatch):
+    monkeypatch.delenv("LIVE_RECONNECT_FAIL_SEC", raising=False)
+    assert Config.from_env().live_reconnect_fail_sec == 30
+    monkeypatch.setenv("LIVE_RECONNECT_FAIL_SEC", "12")
+    assert Config.from_env().live_reconnect_fail_sec == 12
+
+
+def test_env_example_lists_the_live_reconnect_setting():
+    lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+    assert "LIVE_RECONNECT_FAIL_SEC=30" in lines
+
+
 def test_env_example_lists_the_record_settings():
     lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
     for line in (

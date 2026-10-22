@@ -74,6 +74,7 @@ def build_live_factory(
         fps=config.analyze_fps,
         conf_thres=config.detect_conf,
         edge_margin=config.edge_margin_ratio,
+        reconnect_fail_sec=config.live_reconnect_fail_sec,
     )
 
 

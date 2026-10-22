@@ -92,7 +92,7 @@ def fast_timers(monkeypatch):
     monkeypatch.setattr(live_player, "ANALYSIS_POLL_SEC", 0.02)
 
 
-def make(captures, recorder=None, streams=None, detector=None):
+def make(captures, recorder=None, streams=None, detector=None, **kwargs):
     """captures: 연결할 때마다 차례로 돌려줄 FakeCapture들(다 쓰면 열리지 않는 것)."""
     queue_ = list(captures)
     sink = ResultQueue()
@@ -112,6 +112,7 @@ def make(captures, recorder=None, streams=None, detector=None):
         conf_thres=0.3,
         edge_margin=0.05,
         capture_factory=factory,
+        **kwargs,
     )
     return player, sink, reporter, streams
 
@@ -189,6 +190,49 @@ def test_error_is_reported_after_the_fail_time_and_running_after_recovery():
     assert reporter.calls[0] == (7, "ERROR", "스트림 연결 실패")
     assert statuses == [CameraStatus.ERROR, CameraStatus.RUNNING]
     assert reporter.calls.count((7, "ERROR", "스트림 연결 실패")) == 1
+
+
+def test_the_configured_fail_time_decides_when_error_is_reported():
+    # 모듈 기본값(이 시험에서는 0.3초)이 아니라 넘겨 준 설정값(0.9초)을 따른다
+    captures = [FakeCapture(opened=False) for _ in range(100)]
+    player, _, reporter, _ = make(captures, reconnect_fail_sec=0.9)
+    started = time.monotonic()
+    thread, stop, _ = run(player)
+    time.sleep(0.6)
+    assert reporter.calls == []  # 0.3초를 넘겼지만 설정값 0.9초는 아직이다
+    assert wait_until(lambda: (7, "ERROR", "스트림 연결 실패") in reporter.calls)
+    elapsed = time.monotonic() - started
+    finish(thread, stop)
+    assert elapsed >= 0.9
+
+
+def test_a_longer_configured_fail_time_keeps_the_camera_running():
+    captures = [FakeCapture(opened=False) for _ in range(100)]
+    player, _, reporter, _ = make(captures, reconnect_fail_sec=60)
+    thread, stop, _ = run(player)
+    time.sleep(0.8)
+    finish(thread, stop)
+    assert reporter.calls == []
+
+
+def test_the_live_factory_passes_the_config_fail_time_to_each_player():
+    from unittest.mock import MagicMock
+
+    from white_eyes_flask.app import build_live_factory
+    from white_eyes_flask.config import Config
+
+    config = Config(
+        internal_token="t",
+        yolo_weights=None,
+        host="0.0.0.0",
+        port=5000,
+        live_reconnect_fail_sec=7,
+    )
+    factory = build_live_factory(
+        config, MagicMock(), ResultQueue(), StreamService(), MagicMock()
+    )
+    player, _ = factory.create(3)
+    assert player._reconnect_fail_sec == 7
 
 
 def test_no_error_is_reported_for_a_short_outage():

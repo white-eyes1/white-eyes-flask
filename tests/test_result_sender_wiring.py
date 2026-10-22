@@ -67,20 +67,37 @@ def test_main_stops_the_sender_when_the_server_ends(monkeypatch):
     sender = FakeSender()
     events = []
 
-    class FakeApp:
-        extensions = {"result_sender": sender}
+    class FakeRecovery:
+        def start(self):
+            events.append("recovery start")
 
-        def run(self, host, port):
-            events.append(("run", host, port))
+        def stop(self):
+            events.append("recovery stop")
+
+    class FakeApp:
+        extensions = {"result_sender": sender, "camera_service": object()}
+
+        def run(self, host, port, use_reloader=True):
+            events.append(("run", host, port, use_reloader))
             raise KeyboardInterrupt  # 서버가 Ctrl+C로 끝난다
 
     monkeypatch.setattr(white_eyes_flask, "load_dotenv", lambda: None)
     monkeypatch.setattr(white_eyes_flask, "create_app", lambda config: FakeApp())
+    monkeypatch.setattr(
+        white_eyes_flask,
+        "build_restart_recovery",
+        lambda config, service: FakeRecovery(),
+    )
     served = Config(internal_token="t", yolo_weights=None, host="127.0.0.1", port=5001)
     monkeypatch.setattr(white_eyes_flask.Config, "from_env", lambda: served)
     with pytest.raises(KeyboardInterrupt):
         white_eyes_flask.main()
-    assert events == [("run", "127.0.0.1", 5001)]
+    # 서버를 켜기 전에 복구를 시작하고(FNC-S-012), 끝나면 멈춘다
+    assert events == [
+        "recovery start",
+        ("run", "127.0.0.1", 5001, False),
+        "recovery stop",
+    ]
     assert sender.stopped == 1
 
 

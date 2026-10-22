@@ -11,6 +11,7 @@ from white_eyes_flask.camera.dummy_player import DummyPlayer
 from white_eyes_flask.camera.player import Player
 from white_eyes_flask.camera.preparer import DummyPreparer, Preparer
 from white_eyes_flask.camera.recording_registrar import RecordingRegistrar
+from white_eyes_flask.camera.restart_recovery import DesiredClient, RestartRecovery
 from white_eyes_flask.camera.result_client import ResultClient
 from white_eyes_flask.camera.result_queue import ResultQueue
 from white_eyes_flask.camera.result_sender import ResultSender
@@ -60,6 +61,16 @@ def build_result_sender(config: Config, result_queue: ResultQueue) -> ResultSend
         result_queue,
         ResultClient(config.admin_internal_base_url, config.internal_token),
         config.result_retry_buffer_sec,
+    )
+
+
+def build_restart_recovery(
+    config: Config, camera_service: CameraService
+) -> RestartRecovery:
+    return RestartRecovery(
+        DesiredClient(config.admin_internal_base_url, config.internal_token),
+        camera_service,
+        StatusReporter(config.admin_internal_base_url, config.internal_token),
     )
 
 

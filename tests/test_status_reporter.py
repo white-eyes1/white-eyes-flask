@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from white_eyes_flask.camera.status_reporter import StatusReporter
+from white_eyes_flask.camera.status_reporter import ReportResult, StatusReporter
 
 TOKEN = "t0ken"
 
@@ -108,3 +108,34 @@ def test_connection_failure_is_logged_and_swallowed(caplog):
 def test_token_value_is_never_logged(caplog):
     StatusReporter("http://127.0.0.1:1", TOKEN, timeout=0.5).report(1, "RUNNING")
     assert TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        (204, ReportResult.OK),
+        (400, ReportResult.REJECTED),
+        (404, ReportResult.REJECTED),
+        (401, ReportResult.RETRY),
+        (403, ReportResult.RETRY),
+        (500, ReportResult.RETRY),
+        (503, ReportResult.RETRY),
+    ],
+)
+def test_send_tells_retryable_failures_from_hopeless_ones(server, status, expected):
+    server.status = status
+    result, _ = StatusReporter(base_url(server), TOKEN).send(1, "RUNNING")
+    assert result == expected
+
+
+def test_send_does_not_log_and_never_includes_the_token(server, caplog):
+    server.status = 401
+    result, detail = StatusReporter(base_url(server), TOKEN).send(1, "RUNNING")
+    assert result == ReportResult.RETRY
+    assert "토큰 설정" in detail and TOKEN not in detail
+    assert caplog.text == ""
+
+
+def test_send_treats_connection_failure_as_retryable():
+    reporter = StatusReporter("http://127.0.0.1:1", TOKEN, timeout=0.5)
+    assert reporter.send(1, "RUNNING")[0] == ReportResult.RETRY

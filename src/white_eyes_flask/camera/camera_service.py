@@ -7,6 +7,7 @@ from pathlib import Path
 from white_eyes_flask.camera.camera_job import STOP_WAIT_SEC, CameraJob, CameraStatus
 from white_eyes_flask.camera.player import NullPlayer, Player
 from white_eyes_flask.camera.preparer import NullPreparer, Preparer
+from white_eyes_flask.stream.stream_service import StreamService
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,11 @@ class CameraService:
         media_root: str,
         preparer: Preparer | None = None,
         player: Player | None = None,
+        streams: StreamService | None = None,
     ) -> None:
         self._media_root = Path(media_root)
+        # 캠 작업이 있는 동안만 실시간 화면용 스트림이 열려 있다(FNC-S-011).
+        self._streams = streams or StreamService()
         self._preparer = preparer or NullPreparer()
         self._player = player or NullPlayer()
         # _lock은 아래 세 딕셔너리를 읽고 쓰는 짧은 순간에만 쓴다.
@@ -67,6 +71,7 @@ class CameraService:
                 else CameraStatus.PREPARING
             )
             job = CameraJob(camera_id, source_uri, status, self._preparer, self._player)
+            self._streams.open(camera_id)
             job.start()
             with self._lock:
                 self._jobs[camera_id] = job
@@ -85,6 +90,8 @@ class CameraService:
             if job is None:
                 return
 
+            # 작업이 없어진 것으로 본다: 이후 /live·/snapshot은 404, 보던 MJPEG 연결은 끝난다.
+            self._streams.close(camera_id)
             # 녹화 파일 마무리(FNC-S-008 4~6번)는 해당 이슈에서 채운다.
             # 준비 취소(FNC-S-009)는 정지 플래그로 준비 루프가 스스로 멈추고 임시 파일을 지운다.
             # 전송 대기 중인 결과는 건드리지 않는다(전송 작업이 보냄).

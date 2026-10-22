@@ -2,8 +2,9 @@ import logging
 import threading
 from enum import StrEnum
 
-from white_eyes_flask.camera.player import NullPlayer, PlayOutcome, Player
+from white_eyes_flask.camera.player import NullPlayer, Player, PlayOutcome
 from white_eyes_flask.camera.preparer import NullPreparer, PrepareOutcome, Preparer
+from white_eyes_flask.recording.recorder import Recorder
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class CameraJob:
         status: CameraStatus,
         preparer: Preparer | None = None,
         player: Player | None = None,
+        recorder: Recorder | None = None,
     ) -> None:
         self.camera_id = camera_id
         self.source_uri = source_uri
@@ -34,6 +36,7 @@ class CameraJob:
         self._status = status
         self._preparer = preparer or NullPreparer()
         self._player = player or NullPlayer()
+        self._recorder = recorder
         self._stop_flag = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name=f"cam-{camera_id}", daemon=True
@@ -62,6 +65,21 @@ class CameraJob:
         return not self._thread.is_alive()
 
     def _run(self) -> None:
+        try:
+            self._run_stages()
+        finally:
+            self._close_recorder()
+
+    def _close_recorder(self) -> None:
+        """작업이 어떻게 끝나든 녹화 파일을 닫아 등록한다(FNC-S-008 4~6번)."""
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.close()
+        except Exception:
+            logger.exception("녹화 마무리 중 예외 cameraId=%s", self.camera_id)
+
+    def _run_stages(self) -> None:
         if self.status == CameraStatus.PREPARING:
             # 더미 분석 준비(FNC-S-009). 준비가 끝날 때까지 이 스레드가 맡는다.
             try:

@@ -26,3 +26,50 @@ def test_admin_internal_base_url_can_be_set_from_the_environment(monkeypatch):
 def test_env_example_shows_the_admin_context_path():
     lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
     assert f"ADMIN_INTERNAL_BASE_URL={DEFAULT_URL}" in lines
+
+
+def test_record_settings_default_to_the_spec_values(monkeypatch):
+    for name in (
+        "RECORD_WIDTH",
+        "RECORD_HEIGHT",
+        "RECORD_FPS",
+        "RECORD_TMP_DIR",
+        "FFMPEG_BIN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = Config.from_env()
+    assert (config.record_width, config.record_height, config.record_fps) == (
+        1280,
+        720,
+        10,
+    )
+    assert config.record_tmp_dir == "/var/lib/analyzer/tmp"
+    assert config.ffmpeg_bin == "ffmpeg"
+
+
+def test_record_settings_can_be_set_from_the_environment(monkeypatch):
+    monkeypatch.setenv("RECORD_WIDTH", "640")
+    monkeypatch.setenv("RECORD_HEIGHT", "360")
+    monkeypatch.setenv("RECORD_FPS", "5")
+    monkeypatch.setenv("RECORD_TMP_DIR", "/tmp/rec")
+    monkeypatch.setenv("FFMPEG_BIN", "/opt/ffmpeg")
+    config = Config.from_env()
+    assert (config.record_width, config.record_height, config.record_fps) == (
+        640,
+        360,
+        5,
+    )
+    assert config.record_tmp_dir == "/tmp/rec"
+    assert config.ffmpeg_bin == "/opt/ffmpeg"
+
+
+def test_env_example_lists_the_record_settings():
+    lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+    for line in (
+        "RECORD_WIDTH=1280",
+        "RECORD_HEIGHT=720",
+        "RECORD_FPS=10",
+        "RECORD_TMP_DIR=/var/lib/analyzer/tmp",
+        "FFMPEG_BIN=ffmpeg",
+    ):
+        assert line in lines

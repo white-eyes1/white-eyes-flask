@@ -18,6 +18,11 @@ class Config:
     result_retry_buffer_sec: int = 300
     detector: str = "visdrone"
     detect_dedupe_overlap: float = 0
+    record_width: int = 1280
+    record_height: int = 720
+    record_fps: int = 10
+    record_tmp_dir: str = "/var/lib/analyzer/tmp"
+    ffmpeg_bin: str = "ffmpeg"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -40,4 +45,9 @@ class Config:
             ),
             detector=os.environ.get("DETECTOR", "visdrone"),
             detect_dedupe_overlap=float(os.environ.get("DETECT_DEDUPE_OVERLAP", "0")),
+            record_width=int(os.environ.get("RECORD_WIDTH", "1280")),
+            record_height=int(os.environ.get("RECORD_HEIGHT", "720")),
+            record_fps=int(os.environ.get("RECORD_FPS", "10")),
+            record_tmp_dir=os.environ.get("RECORD_TMP_DIR", "/var/lib/analyzer/tmp"),
+            ffmpeg_bin=os.environ.get("FFMPEG_BIN", "ffmpeg"),
         )

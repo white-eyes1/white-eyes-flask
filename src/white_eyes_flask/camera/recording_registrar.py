@@ -48,16 +48,22 @@ class RecordingRegistrar:
         self._failures = 0
 
     def register(
-        self, camera_id: int, started_ms: int, video_path: str, box_path: str
+        self,
+        camera_id: int,
+        started_ms: int,
+        video_path: str,
+        box_path: str,
+        ended_ms: int | None = None,
     ) -> RegisterResult:
-        body = json.dumps(
-            {
-                "cameraId": camera_id,
-                "startedAt": format_started_at(started_ms),
-                "videoPath": video_path,
-                "boxPath": box_path,
-            }
-        ).encode("utf-8")
+        fields = {
+            "cameraId": camera_id,
+            "startedAt": format_started_at(started_ms),
+            "videoPath": video_path,
+            "boxPath": box_path,
+        }
+        if ended_ms is not None:  # 라이브 1분 파일. 더미는 endedAt이 없다
+            fields["endedAt"] = format_started_at(ended_ms)
+        body = json.dumps(fields).encode("utf-8")
         request = urllib.request.Request(
             f"{self._base_url}/internal/v1/recordings",
             data=body,

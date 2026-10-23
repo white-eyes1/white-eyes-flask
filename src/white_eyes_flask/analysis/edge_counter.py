@@ -50,12 +50,19 @@ class EdgeCounter:
     """
 
     def __init__(
-        self, margin: float, lost_frames: int, fps: float | None = None
+        self,
+        margin: float,
+        lost_frames: int,
+        fps: float | None = None,
+        start_frames: int = 0,
     ) -> None:
         """margin: 판정선 위치(EDGE_MARGIN_RATIO), lost_frames: 끊김으로 확정하는 프레임 수(ANALYZE_FPS).
 
         fps: 초당 분석 프레임 수. 체류 시간(초)을 구할 때 쓰고, 주지 않으면
         lost_frames와 같다(명세에서 끊김은 1초 = ANALYZE_FPS 프레임).
+        start_frames: 처음 받은 프레임부터 이만큼의 프레임(update 호출 횟수, 건너뛴 슬롯은
+        세지 않음) 안에 처음 보인 사람은 시작 때 이미 화면에 있던 사람으로 보고 entry 없이
+        시작한다(더미 영상의 시작 경계).
         """
         if fps is None:
             fps = lost_frames
@@ -64,6 +71,8 @@ class EdgeCounter:
         self._margin = margin
         self._lost_frames = lost_frames
         self._fps = fps
+        self._start_frames = start_frames
+        self._updates = 0  # 지금까지 받은 프레임 수
         self._people: dict[int, _Person] = {}
         self._frame = -1  # 첫 프레임 번호는 0부터 받을 수 있다
         self._counts = self._zero()
@@ -87,6 +96,7 @@ class EdgeCounter:
                     f"프레임 번호는 늘어나야 합니다: {frame_no} <= {self._frame}"
                 )
             self._frame = frame_no
+            self._updates += 1
             self._expire_missing(points)
             for track_id, (cx, cy) in points.items():
                 self._observe(track_id, band_of(cx, cy, self._margin))
@@ -110,7 +120,7 @@ class EdgeCounter:
             person = None
         if person is None:
             self._people[track_id] = _Person(
-                entry=band,
+                entry=None if self._updates <= self._start_frames else band,
                 band=band,
                 leaving=None,
                 last_seen=self._frame,

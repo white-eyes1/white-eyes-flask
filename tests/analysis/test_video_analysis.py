@@ -135,16 +135,30 @@ def test_entering_from_the_top_band_is_counted_in_north(tmp_path, cache):
 
     def script(i):
         # 박스가 화면 안에 있게 작게 만들고(화면 밖으로 잘리면 중심이 달라짐) 위에서 아래로.
-        # 번호는 두 번째 프레임부터 받으므로 슬롯 0·1(y=2, 4)이 위쪽 띠 안이어야 한다.
-        return [person(80, 2 + 2 * min(i, 14), size=8)]
+        # 슬롯 1부터 보이면 번호는 슬롯 2부터 붙는다(세 번째 분석 프레임) -> 시작 때 있던 사람이 아니다.
+        if i == 0:
+            return []
+        return [person(80, 2 + 2 * min(i - 1, 14), size=8)]
 
     seconds = run(video, ScriptedDetector(script), cache)
     assert sum(s["in"]["N"] for s in seconds) == 1
     assert sum(sum(s["out"].values()) for s in seconds) == 0
 
 
-def test_leaving_through_the_bottom_band_counts_out_and_dwell(tmp_path, cache):
+def test_person_already_in_the_band_at_the_start_is_not_counted_in(tmp_path, cache):
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
+
+    def script(i):
+        # 슬롯 0부터 보여 번호는 슬롯 1(두 번째 분석 프레임)부터 붙는다 -> 시작 때 있던 사람
+        return [person(80, 2 + 2 * min(i, 14), size=8)]
+
+    seconds = run(video, ScriptedDetector(script), cache)
+    assert sum(sum(s["in"].values()) for s in seconds) == 0
+    assert sum(sum(s["out"].values()) for s in seconds) == 0
+
+
+def test_leaving_through_the_bottom_band_counts_out_and_dwell(tmp_path, cache):
+    video = make_video(tmp_path / "clip.mp4", frames=150, fps=30)  # 슬롯 0~24
 
     def script(i):
         if i <= 12:
@@ -159,18 +173,30 @@ def test_leaving_through_the_bottom_band_counts_out_and_dwell(tmp_path, cache):
     assert dwell == [2.2]
 
 
-def test_leaving_right_before_the_end_is_confirmed_after_the_last_frame(
-    tmp_path, cache
-):
+def test_leaving_right_before_the_end_is_not_counted_out(tmp_path, cache):
     video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)  # 슬롯 0~14
 
     def script(i):
-        # 마지막 슬롯(y=116)에 아래 띠로 나감 -> 영상이 끝나 확정은 그 뒤
+        # 마지막 슬롯(y=116)에 아래 띠로 나감 -> 영상이 끝나 확정되지 않으므로 유출이 아니다
         return [person(80, 60 + 4 * i, size=8)]
 
     seconds = run(video, ScriptedDetector(script), cache)
-    assert seconds[-1]["out"]["S"] == 1
-    assert seconds[-1]["dwellSec"] == [2.6]  # 슬롯 1부터 슬롯 14까지 = 13 / 5
+    assert sum(sum(s["out"].values()) for s in seconds) == 0
+    assert [d for s in seconds for d in s["dwellSec"]] == []
+
+
+def test_boundaries_add_nothing_when_the_same_video_is_analyzed_twice(tmp_path, cache):
+    video = make_video(tmp_path / "clip.mp4", frames=90, fps=30)
+
+    def script(i):
+        # 시작부터 위 띠에 있다가 안쪽으로 내려오고(시작 경계), 끝에서 아래 띠로 나감(끝 경계)
+        return [person(80, 2 + 8.2 * i, size=8)]
+
+    first = run(video, ScriptedDetector(script), cache)
+    second = run(video, ScriptedDetector(script), cache)
+    for seconds in (first, second):
+        assert sum(sum(s["in"].values()) for s in seconds) == 0
+        assert sum(sum(s["out"].values()) for s in seconds) == 0
 
 
 def test_box_file_has_one_frame_per_slot_with_normalized_boxes(tmp_path, cache):

@@ -211,6 +211,51 @@ def test_frame_numbers_can_start_from_zero():
     assert totals(counter) == expect(in_N=1)
 
 
+def test_person_first_seen_within_start_frames_does_not_count_in():
+    counter = EdgeCounter(margin=MARGIN, lost_frames=LOST, start_frames=2)
+    counter.update({}, frame_no=0)
+    counter.update(
+        {1: (0.5, 0.02)}, frame_no=1
+    )  # 두 번째 분석 프레임: 시작 때 있던 사람
+    counter.update({1: (0.5, 0.3)}, frame_no=2)
+    assert totals(counter) == expect()
+
+
+def test_person_first_seen_on_third_frame_counts_in():
+    counter = EdgeCounter(margin=MARGIN, lost_frames=LOST, start_frames=2)
+    counter.update({}, frame_no=0)
+    counter.update({}, frame_no=1)
+    counter.update({1: (0.5, 0.02)}, frame_no=2)  # 세 번째 분석 프레임
+    counter.update({1: (0.5, 0.3)}, frame_no=3)
+    assert totals(counter) == expect(in_N=1)
+
+
+def test_start_frames_count_from_the_first_frame_received():
+    counter = EdgeCounter(margin=MARGIN, lost_frames=LOST, start_frames=2)
+    counter.update({}, frame_no=10)
+    counter.update({1: (0.5, 0.02)}, frame_no=11)
+    counter.update({1: (0.5, 0.3)}, frame_no=12)
+    assert totals(counter) == expect()
+
+
+def test_skipped_slots_do_not_use_up_start_frames():
+    counter = EdgeCounter(margin=MARGIN, lost_frames=LOST, start_frames=2)
+    counter.update({}, frame_no=5)
+    counter.update(
+        {1: (0.5, 0.02)}, frame_no=7
+    )  # 슬롯은 건너뛰었지만 두 번째 분석 프레임
+    counter.update({1: (0.5, 0.3)}, frame_no=8)
+    assert totals(counter) == expect()
+
+
+def test_start_frames_do_not_affect_leaving():
+    counter = EdgeCounter(margin=MARGIN, lost_frames=LOST, start_frames=2)
+    counter.update({1: (0.5, 0.5)}, frame_no=0)
+    counter.update({1: (0.5, 0.98)}, frame_no=1)
+    idle(counter, LOST)
+    assert totals(counter) == expect(out_S=1)
+
+
 def test_frame_numbers_must_increase():
     counter = make()
     counter.update({}, frame_no=5)

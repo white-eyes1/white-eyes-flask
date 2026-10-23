@@ -19,6 +19,12 @@ curl -H "X-Internal-Token: <토큰>" localhost:5000/analyzer/v1/health
 uv run pytest
 ```
 
+## 녹화 파일 정리 (FNC-S-014)
+스토리지 서버 cron이 매일 04:00에 `ops/cleanup_recordings.sh`를 돌린다. `find`로 `recordings/live`의 31일 지난 `.mp4`·`.json.gz`를 지우고, 비게 된 날짜 폴더를 지운다. `MEDIA_ROOT`(기본 `/srv/media`)만 바꿀 수 있고, 경로를 `recordings/live`로 고정해 `dummy/`는 건드리지 않는다. 분석 서버 앱과 따로 실행한다.
+```
+0 4 * * * MEDIA_ROOT=/srv/media /path/to/ops/cleanup_recordings.sh
+```
+
 ## 의존성
 
 `pyproject.toml`/`uv.lock`이 원본이고, `requirements.txt`(실행용)와 `requirements-dev.txt`(+pytest)는 버전까지 고정한 내보내기본이다. 의존성을 바꾼 뒤 다시 만든다.

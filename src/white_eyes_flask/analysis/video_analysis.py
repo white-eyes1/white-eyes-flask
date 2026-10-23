@@ -50,8 +50,9 @@ def analyze_video(
 
     분석 프레임은 영상 시각 기준으로 초당 fps개를 고른다(슬롯 = 영상 시각 x fps).
     영상 fps가 fps의 배수가 아니어도 되고, 오류로 건너뛴 슬롯은 시간이 지난 것으로
-    센다. 추적기는 새로 시작한다. 영상 끝에서 아직 확정되지 않은 유출은 끝난 뒤
-    1초 동안 안 보인 것으로 보고 마지막 초에 넣는다.
+    센다. 추적기는 새로 시작한다. 영상은 반복 재생되므로 경계에서 유입/유출이 생기지
+    않게 한다: 시작 때 첫 두 분석 프레임에 처음 보인 사람은 유입으로 세지 않고,
+    끝에서 아직 확정되지 않은 유출은 세지 않는다.
     """
     capture = cv2.VideoCapture(str(path))
     try:
@@ -90,12 +91,11 @@ def _analyze(
     on_progress: Callable[[int], None],
 ) -> AnalysisResult:
     tracker = CameraTracker(detector, conf_thres, track_buffer=fps)
-    edge = EdgeCounter(edge_margin, lost_frames=fps, fps=fps)
+    edge = EdgeCounter(edge_margin, lost_frames=fps, fps=fps, start_frames=2)
     person_totals: dict[int, list[int]] = {}  # 초 -> [인원 합, 프레임 수]
     edge_by_second: dict[int, dict[str, Any]] = {}
     current_second: int | None = None
     last_slot = -1
-    last_edge_slot: int | None = None
     next_progress = PROGRESS_STEP
     index = -1
 
@@ -128,7 +128,6 @@ def _analyze(
             if box.track_id is not None
         }
         edge.update(points, frame_no=slot)
-        last_edge_slot = slot
         writer.add_frame(slot / fps, result.boxes)
         totals = person_totals.setdefault(second, [0, 0])
         totals[0] += result.count
@@ -139,8 +138,7 @@ def _analyze(
     if total_frames > 0 and index + 1 < total_frames * _MIN_READ_RATIO:
         # 끝까지 읽지 못하고 중간에 끊김: 일부만 캐시하면 안 된다
         raise VideoReadError(f"영상을 중간까지만 읽음: {index + 1}/{total_frames}")
-    if last_edge_slot is not None:
-        edge.update({}, frame_no=last_edge_slot + fps)  # 끝난 뒤 1초 동안 안 보임
+    # 영상 끝에서 확정되지 않은 '나가는 중'은 유출로 세지 않는다(FNC-S-004 업무 규칙 ②)
     _merge(edge_by_second, current_second, edge.pop_counts())
     seconds = _build_seconds(current_second, person_totals, edge_by_second)
     # 영상 길이 L = 읽은 프레임 수 / 영상 fps. 재생(FNC-S-010)이 반복 경계로 쓴다.

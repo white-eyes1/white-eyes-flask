@@ -18,12 +18,15 @@ from white_eyes_flask.camera.result_queue import ResultQueue
 from white_eyes_flask.camera.result_sender import ResultSender
 from white_eyes_flask.camera.status_reporter import StatusReporter
 from white_eyes_flask.config import Config
+from white_eyes_flask.live.live_factory import LiveFactory, LiveWorkFactory
 from white_eyes_flask.logging_setup import (
     NO_REQUEST_ID,
     accept_request_id,
     configure_logging,
     remember_request_id,
 )
+from white_eyes_flask.recording.ffmpeg import RecorderSettings
+from white_eyes_flask.recording.publisher import RecordingPublisher
 from white_eyes_flask.stream.stream_controller import stream_bp
 from white_eyes_flask.stream.stream_service import StreamService
 
@@ -31,17 +34,60 @@ TOKEN_HEADER = "X-Internal-Token"
 REQUEST_ID_HEADER = "X-Request-Id"
 
 
-def build_preparer(config: Config, cache: DummyCache) -> DummyPreparer:
+def build_detector_provider(config: Config) -> LazyDetectorProvider:
+    return LazyDetectorProvider(
+        config.yolo_weights,
+        config.detect_imgsz,
+        config.detect_conf,
+        config.detector,
+        config.detect_dedupe_overlap,
+    )
+
+
+def build_recording_publisher(config: Config) -> RecordingPublisher:
+    return RecordingPublisher(
+        config.media_root,
+        RecordingRegistrar(config.admin_internal_base_url, config.internal_token),
+    )
+
+
+def build_live_factory(
+    config: Config,
+    detector_provider: LazyDetectorProvider,
+    result_queue: ResultQueue,
+    streams: StreamService,
+    publisher: RecordingPublisher,
+) -> LiveFactory:
+    return LiveFactory(
+        detector_provider=detector_provider,
+        sink=result_queue,
+        reporter=StatusReporter(config.admin_internal_base_url, config.internal_token),
+        streams=streams,
+        publisher=publisher,
+        record_settings=RecorderSettings(
+            width=config.record_width,
+            height=config.record_height,
+            fps=config.record_fps,
+            analyze_fps=config.analyze_fps,
+            tmp_dir=config.record_tmp_dir,
+            ffmpeg_bin=config.ffmpeg_bin,
+        ),
+        fps=config.analyze_fps,
+        conf_thres=config.detect_conf,
+        edge_margin=config.edge_margin_ratio,
+        reconnect_fail_sec=config.live_reconnect_fail_sec,
+    )
+
+
+def build_preparer(
+    config: Config,
+    cache: DummyCache,
+    detector_provider: LazyDetectorProvider | None = None,
+) -> DummyPreparer:
     return DummyPreparer(
         media_root=config.media_root,
         cache=cache,
-        detector_provider=LazyDetectorProvider(
-            config.yolo_weights,
-            config.detect_imgsz,
-            config.detect_conf,
-            config.detector,
-            config.detect_dedupe_overlap,
-        ),
+        detector_provider=detector_provider or build_detector_provider(config),
         reporter=StatusReporter(config.admin_internal_base_url, config.internal_token),
         fps=config.analyze_fps,
         conf_thres=config.detect_conf,
@@ -88,6 +134,7 @@ def create_app(
     preparer: Preparer | None = None,
     player: Player | None = None,
     result_sender: ResultSender | None = None,
+    live: LiveWorkFactory | None = None,
 ) -> Flask:
     app = Flask(__name__)
     config = config or Config.from_env()
@@ -100,11 +147,21 @@ def create_app(
     # 실시간 화면·미리보기용 최신 프레임. 캠 작업이 열고 닫고, 분석 쪽이 프레임을 넣는다.
     stream_service = StreamService()
     app.extensions["stream_service"] = stream_service
+    # 실제 부품을 쓸 때만 LIVE 녹화 게시기와 라이브 부품을 만든다(시험은 가짜를 넣거나 LIVE를 기다리기만 하게 둔다).
+    detector_provider = build_detector_provider(config)
+    if live is None and player is None and preparer is None:
+        publisher = build_recording_publisher(config)
+        publisher.start()
+        app.extensions["recording_publisher"] = publisher
+        live = build_live_factory(
+            config, detector_provider, result_queue, stream_service, publisher
+        )
     app.extensions["camera_service"] = CameraService(
         config.media_root,
-        preparer or build_preparer(config, cache),
+        preparer or build_preparer(config, cache, detector_provider),
         player or build_player(config, cache, result_queue, stream_service),
         stream_service,
+        live,
     )
     app.register_blueprint(camera_bp)
     app.register_blueprint(stream_bp)

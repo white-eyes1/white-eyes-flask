@@ -23,6 +23,7 @@ class Config:
     record_fps: int = 10
     record_tmp_dir: str = "/var/lib/analyzer/tmp"
     ffmpeg_bin: str = "ffmpeg"
+    live_reconnect_fail_sec: int = 30
     log_level: str = "INFO"
 
     @classmethod
@@ -51,5 +52,8 @@ class Config:
             record_fps=int(os.environ.get("RECORD_FPS", "10")),
             record_tmp_dir=os.environ.get("RECORD_TMP_DIR", "/var/lib/analyzer/tmp"),
             ffmpeg_bin=os.environ.get("FFMPEG_BIN", "ffmpeg"),
+            live_reconnect_fail_sec=int(
+                os.environ.get("LIVE_RECONNECT_FAIL_SEC", "30")
+            ),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
         )

@@ -98,16 +98,21 @@ def test_camera_already_running_is_not_started_twice(service):
     assert service._get_job(1) is first_job
 
 
-def test_live_camera_is_skipped_and_next_camera_still_starts(service, caplog):
+def test_live_camera_is_restarted_and_next_camera_still_starts(service):
     live = {"cameraId": 5, "sourceType": "LIVE", "sourceUri": "rtsp://x/y"}
     reporter = FakeReporter()
-    with caplog.at_level("WARNING"):
-        make(FakeClient(), service, reporter).recover([live, dummy(1)])
-    assert service.job_count() == 1
-    # 건너뛴 LIVE 캠은 관리자 화면이 옛 상태로 남지 않게 ERROR와 이유를 알린다
-    assert (5, "ERROR", "지원하지 않는 영상 종류") in reporter.calls
+    make(FakeClient(), service, reporter).recover([live, dummy(1)])
+    assert service.job_count() == 2
+    assert (5, "RUNNING", None) in reporter.calls
     assert (1, "PREPARING", None) in reporter.calls
-    assert "cameraId=5" in caplog.text
+
+
+def test_live_camera_with_a_bad_address_reports_error_and_continues(service):
+    bad = {"cameraId": 5, "sourceType": "LIVE", "sourceUri": "file:///etc/passwd"}
+    reporter = FakeReporter()
+    make(FakeClient(), service, reporter).recover([bad, dummy(1)])
+    assert service.job_count() == 1
+    assert (5, "ERROR", "영상 파일을 찾을 수 없음") in reporter.calls
 
 
 def test_missing_video_reports_error_and_continues(service):

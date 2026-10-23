@@ -12,7 +12,6 @@ from typing import Any, Protocol
 from white_eyes_flask.camera.camera_service import (
     CameraStoppingError,
     SourceNotFoundError,
-    SourceTypeNotSupportedError,
 )
 from white_eyes_flask.camera.status_reporter import ReportResult
 
@@ -23,7 +22,6 @@ RETRY_INTERVAL_SEC = 10
 SHUTDOWN_JOIN_SEC = 2.0
 _LOG_EVERY = 30
 ERROR_SOURCE_NOT_FOUND = "영상 파일을 찾을 수 없음"
-ERROR_SOURCE_TYPE = "지원하지 않는 영상 종류"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -156,19 +154,13 @@ class RestartRecovery:
         camera_id, source_type, source_uri = parsed
         try:
             self._service.start(camera_id, source_type, source_uri)
-        except SourceTypeNotSupportedError:
-            # LIVE는 라이브 분석(FNC-S-007) 구현 전까지 시작할 수 없다. 서버는 계속 뜬다.
-            # 관리자 화면이 옛 상태(RUNNING)로 남지 않게 ERROR로 알린다.
-            logger.warning(
-                "복구할 수 없는 영상 종류라 건너뜀 cameraId=%s sourceType=%s",
+        except SourceNotFoundError:
+            # DUMMY 파일이 없거나 LIVE 주소가 rtsp://가 아님
+            logger.error(
+                "복구할 영상 파일이 없거나 주소가 올바르지 않음 cameraId=%s sourceType=%s",
                 camera_id,
                 source_type,
             )
-            return self._deliver(
-                _ReportAgain(camera_id, ERROR_SOURCE_TYPE, follow_job=False)
-            )
-        except SourceNotFoundError:
-            logger.error("복구할 영상 파일이 없음 cameraId=%s", camera_id)
             return self._deliver(
                 _ReportAgain(camera_id, ERROR_SOURCE_NOT_FOUND, follow_job=False)
             )

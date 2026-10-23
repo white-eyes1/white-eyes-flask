@@ -365,3 +365,17 @@ def test_stop_ends_open_live_connection(client, app):
     client.post("/analyzer/v1/cameras/7/stop", headers=HEADERS)
     assert list(chunks)[-1:] in ([b"\r\n"], [])
     assert stream.viewer_count == 0
+
+
+def test_idle_stream_resends_an_image_so_a_closed_window_is_noticed(monkeypatch):
+    from white_eyes_flask.stream import stream_service
+
+    monkeypatch.setattr(stream_service, "IDLE_RESEND_SEC", 0.05)
+    monkeypatch.setattr(stream_service, "FRAME_WAIT_SEC", 0.02)
+    stream = CameraStream()
+    live = stream.live_jpegs()
+    first = next(live)  # 프레임이 한 번도 없어도 '신호 없음' 이미지를 보낸다
+    assert first.startswith(b"\xff\xd8")
+    assert stream.viewer_count == 1
+    live.close()
+    assert stream.viewer_count == 0

@@ -3,7 +3,8 @@
 원본 프레임을 ffmpeg에 넘겨 시계 분 단위 mp4로 녹화하고, 분석 프레임의 박스를 같은 분 단위
 좌표 파일로 저장한다. 분이 끝나 파일이 완성되면 게시기(RecordingPublisher)에 넘긴다.
 
-호출 규칙: write_frame·add_boxes는 캠 작업 스레드 하나에서만, close는 그 스레드가 끝날 때 부른다.
+호출 규칙: write_frame은 캠 작업 스레드 하나에서만, close는 그 스레드가 끝날 때 부른다.
+add_boxes는 분석 스레드에서 불러도 된다(박스 잠금으로 지킨다). close 전에 분석 스레드를 먼저 끝낸다.
 """
 
 import contextlib
@@ -364,7 +365,8 @@ class LiveRecorder:
         # 첫 파일은 가동 시각이 속한 분, 그 뒤 파일은 ffmpeg가 끊은 시각에서 가장 가까운 분이 이름이다
         name_ms = started_ms if index == 0 else nearest_minute_ms(started_ms)
         stem = file_stem(self.camera_id, name_ms)
-        box_path = self._tmp_dir / f"{stem}_{index:05d}.json.gz"
+        # 같은 분에 끊겼다 복구돼 녹화기가 새로 만들어져도 임시 파일이 겹치지 않게 첫 프레임 시각을 넣는다
+        box_path = self._tmp_dir / f"{stem}_{self._first_ms}_{index:05d}.json.gz"
         frames = [((at - started_ms) / 1000, boxes) for at, boxes in inside]
         try:
             write_box_file(box_path, self._settings.analyze_fps, frames)

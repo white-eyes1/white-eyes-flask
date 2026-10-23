@@ -185,10 +185,19 @@ def test_running_camera_ignores_source_changes(client, app, media_root: Path):
     assert app.extensions["camera_service"].job_count() == 1
 
 
-def test_live_is_not_implemented_in_stage1(client, app):
+def test_live_start_returns_running(client, app):
     body = {"sourceType": "LIVE", "sourceUri": "rtsp://example/stream"}
     res = client.post(START_URL, json=body, headers=HEADERS)
-    assert res.status_code == 501
+    assert res.status_code == 200
+    assert res.get_json() == {"cameraId": 7, "status": "RUNNING"}
+    assert app.extensions["camera_service"].job_count() == 1
+
+
+def test_live_with_a_non_rtsp_address_is_source_not_found(client, app):
+    body = {"sourceType": "LIVE", "sourceUri": "http://example/stream"}
+    res = client.post(START_URL, json=body, headers=HEADERS)
+    assert res.status_code == 400
+    assert res.get_json()["code"] == "SOURCE_NOT_FOUND"
     assert app.extensions["camera_service"].job_count() == 0
 
 

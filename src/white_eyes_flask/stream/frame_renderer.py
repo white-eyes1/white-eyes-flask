@@ -1,5 +1,7 @@
 """FNC-S-011 최신 프레임에 박스·인원수를 그려 JPEG로 만든다."""
 
+import functools
+
 import cv2
 import numpy as np
 
@@ -54,6 +56,26 @@ def render_jpeg(
     )
 
     ok, encoded = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise FrameEncodeError("JPEG 변환 실패")
+    return encoded.tobytes()
+
+
+@functools.cache
+def no_signal_jpeg() -> bytes:
+    """첫 프레임이 오기 전(또는 오래 끊긴 동안) 연결을 살려 두려고 보내는 회색 이미지."""
+    canvas = np.full((360, 640, 3), 40, dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "NO SIGNAL",
+        (200, 190),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.2,
+        (200, 200, 200),
+        2,
+        cv2.LINE_AA,
+    )
+    ok, encoded = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 60])
     if not ok:
         raise FrameEncodeError("JPEG 변환 실패")
     return encoded.tobytes()

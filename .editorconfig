@@ -1,0 +1,26 @@
+# 형식 기준(code-conventions.md 2-2). Python의 세부 형식은 Black·isort가 맞춘다
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,toml}]
+indent_size = 2
+
+[*.md]
+# 줄 끝 공백 두 칸은 마크다운 줄바꿈이다
+trim_trailing_whitespace = false
+
+[vendor/**]
+# 외부 코드(수정 금지)는 형식 규칙을 적용하지 않는다
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset

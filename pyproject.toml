@@ -23,6 +23,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
+    # 형식 검사(code-conventions.md 4-1). CI가 black --check·isort --check-only를 돌린다
+    "black==26.10.1",
+    "isort==9.0.2",
 ]
 
 [project.scripts]
@@ -43,3 +46,13 @@ explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# 형식(code-conventions.md 2-2·4-1). vendor/는 외부 코드라 고치지 않는다
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+extend-exclude = "^/vendor/"
+
+[tool.isort]
+profile = "black"
+extend_skip = ["vendor"]

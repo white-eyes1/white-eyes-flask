@@ -22,6 +22,7 @@
 - 설치: `uv sync` (`.env`는 `cp .env.example .env` 후 값 채움)
 - 실행: `uv run white-eyes-flask` (포트 5000, `.env`의 PORT. `.env`는 앱이 직접 읽음)
 - 테스트: `uv run pytest`
+- 형식 정리: `uv run black .`·`uv run isort .`(CI가 `black --check`·`isort --check-only`로 확인. `vendor/`는 건너뜀)
 - 의존성을 바꾸면 README의 `uv export` 두 줄로 requirements 파일을 다시 만든다.
 
 ## 규칙

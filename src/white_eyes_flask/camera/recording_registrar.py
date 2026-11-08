@@ -1,29 +1,21 @@
 """FNC-S-010 녹화 등록 (POST /internal/v1/recordings)"""
 
 import http.client
-import json
 import logging
 import threading
 import urllib.error
-import urllib.request
 from enum import StrEnum
 
+from white_eyes_flask.camera.admin_client import AdminClient
 from white_eyes_flask.camera.kst import format_started_at
 
 logger = logging.getLogger(__name__)
 
-TOKEN_HEADER = "X-Internal-Token"
 # 결과 전송(ResultClient)과 같은 규칙: 400만 버리고 나머지는 다시 보낸다
 _REJECTED_STATUSES = {400}
 _AUTH_FAILURES = {401, 403}
 # 같은 실패가 이어질 때 첫 번째와 이 횟수마다 한 번만 로그를 남긴다
 _LOG_EVERY = 30
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        # 따라가지 않는다. 토큰이 다른 주소로 가지 않게 한다(3xx는 재시도).
-        return None
 
 
 class RegisterResult(StrEnum):
@@ -39,10 +31,8 @@ class RecordingRegistrar:
     """
 
     def __init__(self, base_url: str, token: str, timeout: float = 2.0) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._token = token
+        self._admin = AdminClient(base_url, token)
         self._timeout = timeout
-        self._opener = urllib.request.build_opener(_NoRedirect)
         # 한 인스턴스를 여러 캠 스레드가 같이 쓴다
         self._lock = threading.Lock()
         self._failures = 0
@@ -63,15 +53,10 @@ class RecordingRegistrar:
         }
         if ended_ms is not None:  # 라이브 1분 파일. 더미는 endedAt이 없다
             fields["endedAt"] = format_started_at(ended_ms)
-        body = json.dumps(fields).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self._base_url}/internal/v1/recordings",
-            data=body,
-            method="POST",
-            headers={"Content-Type": "application/json", TOKEN_HEADER: self._token},
-        )
         try:
-            with self._opener.open(request, timeout=self._timeout):
+            with self._admin.open(
+                "POST", "/internal/v1/recordings", timeout=self._timeout, body=fields
+            ):
                 self._recovered()
                 return RegisterResult.OK
         except urllib.error.HTTPError as error:

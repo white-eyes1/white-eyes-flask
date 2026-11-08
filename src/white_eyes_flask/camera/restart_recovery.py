@@ -5,10 +5,10 @@ import json
 import logging
 import threading
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from white_eyes_flask.camera.admin_client import AdminClient
 from white_eyes_flask.camera.camera_service import (
     CameraStoppingError,
     SourceNotFoundError,
@@ -17,35 +17,25 @@ from white_eyes_flask.camera.status_reporter import ReportResult
 
 logger = logging.getLogger(__name__)
 
-TOKEN_HEADER = "X-Internal-Token"
 RETRY_INTERVAL_SEC = 10
 SHUTDOWN_JOIN_SEC = 2.0
 _LOG_EVERY = 30
 ERROR_SOURCE_NOT_FOUND = "영상 파일을 찾을 수 없음"
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        # 따라가지 않는다. 토큰이 다른 주소로 가지 않게 한다.
-        return None
-
-
 class DesiredClient:
     """가동 대상 캠 목록을 관리자 앱에서 받는다. 실패하면 None을 돌려주고 로그만 남긴다."""
 
     def __init__(self, base_url: str, token: str, timeout: float = 5.0) -> None:
-        self._url = f"{base_url.rstrip('/')}/internal/v1/cameras/desired"
-        self._token = token
+        self._admin = AdminClient(base_url, token)
         self._timeout = timeout
-        self._opener = urllib.request.build_opener(_NoRedirect)
         self._failures = 0
 
     def fetch(self) -> list[Any] | None:
-        request = urllib.request.Request(
-            self._url, method="GET", headers={TOKEN_HEADER: self._token}
-        )
         try:
-            with self._opener.open(request, timeout=self._timeout) as response:
+            with self._admin.open(
+                "GET", "/internal/v1/cameras/desired", timeout=self._timeout
+            ) as response:
                 payload = json.loads(response.read())
         except urllib.error.HTTPError as error:
             error.close()

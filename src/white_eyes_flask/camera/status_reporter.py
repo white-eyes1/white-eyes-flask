@@ -1,13 +1,18 @@
+"""캠 상태 보고 (PATCH /internal/v1/cameras/{id}/status)
+
+FNC-S-001 후속 동작에서 정한 보고다. 준비·재생·라이브·재시작 복구(FNC-S-007·009·010·012)가
+같이 쓰고, 관리자 앱이 받는다(FNC-A-025).
+"""
+
 import http.client
-import json
 import logging
 import urllib.error
-import urllib.request
 from enum import StrEnum
+
+from white_eyes_flask.camera.admin_client import AdminClient
 
 logger = logging.getLogger(__name__)
 
-TOKEN_HEADER = "X-Internal-Token"
 # 같은 보고를 다시 보내도 소용없는 응답: 형식 오류(400), 캠 없음(404)
 _REJECTED_STATUSES = {400, 404}
 _AUTH_FAILURES = {401, 403}
@@ -27,8 +32,7 @@ class StatusReporter:
     """
 
     def __init__(self, base_url: str, token: str, timeout: float = 2.0) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._token = token
+        self._admin = AdminClient(base_url, token)
         self._timeout = timeout
 
     def report(
@@ -54,17 +58,14 @@ class StatusReporter:
         error_message: str | None = None,
     ) -> tuple[ReportResult, str]:
         """보고하고 (결과, 실패 이유)를 돌려준다. 로그는 남기지 않는다. 토큰은 이유에 넣지 않는다."""
-        body = json.dumps(
-            {"status": status, "progress": progress, "errorMessage": error_message}
-        ).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self._base_url}/internal/v1/cameras/{camera_id}/status",
-            data=body,
-            method="PATCH",
-            headers={"Content-Type": "application/json", TOKEN_HEADER: self._token},
-        )
+        body = {"status": status, "progress": progress, "errorMessage": error_message}
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout):
+            with self._admin.open(
+                "PATCH",
+                f"/internal/v1/cameras/{camera_id}/status",
+                timeout=self._timeout,
+                body=body,
+            ):
                 return ReportResult.OK, ""
         except urllib.error.HTTPError as error:
             error.close()

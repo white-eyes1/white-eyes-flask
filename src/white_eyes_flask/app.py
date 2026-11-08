@@ -5,6 +5,7 @@ from flask import Flask, g, jsonify, request
 
 from white_eyes_flask.analysis.detector_provider import LazyDetectorProvider
 from white_eyes_flask.analysis.dummy_cache import DummyCache
+from white_eyes_flask.camera.admin_client import TOKEN_HEADER
 from white_eyes_flask.camera.camera_controller import camera_bp
 from white_eyes_flask.camera.camera_service import CameraService
 from white_eyes_flask.camera.dummy_player import DummyPlayer
@@ -30,7 +31,6 @@ from white_eyes_flask.recording.publisher import RecordingPublisher
 from white_eyes_flask.stream.stream_controller import stream_bp
 from white_eyes_flask.stream.stream_service import StreamService
 
-TOKEN_HEADER = "X-Internal-Token"
 REQUEST_ID_HEADER = "X-Request-Id"
 
 

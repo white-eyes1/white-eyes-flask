@@ -1,0 +1,58 @@
+"""FNC-S-001·002 캠 시작·정지 API (/analyzer/v1/cameras)"""
+
+from flask import Blueprint, Response, current_app, request
+
+from white_eyes_flask.camera.camera_service import (
+    CameraService,
+    CameraStoppingError,
+    SourceNotFoundError,
+)
+from white_eyes_flask.common.errors import error_response
+
+camera_bp = Blueprint("camera", __name__, url_prefix="/analyzer/v1/cameras")
+
+SOURCE_TYPES = {"LIVE", "DUMMY"}
+
+
+@camera_bp.post("/<int:camera_id>/start")
+def start_camera(camera_id: int) -> dict[str, object] | tuple[Response, int]:
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _invalid_input([("body", "JSON 객체여야 합니다.")])
+
+    source_type = body.get("sourceType")
+    source_uri = body.get("sourceUri")
+    problems: list[tuple[str, str]] = []
+    if not isinstance(source_type, str) or source_type not in SOURCE_TYPES:
+        problems.append(("sourceType", "LIVE 또는 DUMMY여야 합니다."))
+    if not isinstance(source_uri, str):
+        problems.append(("sourceUri", "문자열이어야 합니다."))
+    if problems:
+        return _invalid_input(problems)
+
+    service: CameraService = current_app.extensions["camera_service"]
+    try:
+        status = service.start(camera_id, source_type, source_uri)
+    except SourceNotFoundError:
+        return error_response("SOURCE_NOT_FOUND", "영상 파일을 찾을 수 없습니다.", 400)
+    except CameraStoppingError:
+        return error_response(
+            "CAMERA_STOPPING",
+            "정지가 아직 끝나지 않았습니다. 잠시 뒤 다시 시작해 주세요.",
+            409,
+        )
+    return {"cameraId": camera_id, "status": status}
+
+
+@camera_bp.post("/<int:camera_id>/stop")
+def stop_camera(camera_id: int) -> Response:
+    service: CameraService = current_app.extensions["camera_service"]
+    service.stop(camera_id)
+    return Response(status=200)
+
+
+def _invalid_input(problems: list[tuple[str, str]]) -> tuple[Response, int]:
+    field_errors = [{"field": field, "message": text} for field, text in problems]
+    return error_response(
+        "INVALID_INPUT", "요청 형식이 올바르지 않습니다.", 400, field_errors
+    )

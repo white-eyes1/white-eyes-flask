@@ -1,3 +1,5 @@
+"""프레임 분석 결과를 담는 값 객체(탐지기·추적기가 만들고 이후 단계가 읽는다)."""
+
 from dataclasses import dataclass
 
 
@@ -23,5 +25,7 @@ class TrackedBox:
 class FrameResult:
     """프레임 하나의 분석 결과. count는 박스 수(추정 인원)다."""
 
+    # 박스 개수 = 추정 인원
     count: int
+    # 프레임 안의 모든 사람 박스
     boxes: list[TrackedBox]

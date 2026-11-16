@@ -4,12 +4,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# 같은 사람으로 이을 수 있는 거리(반경)의 하한·상한. 단위는 호출하는 쪽이 정한 좌표 단위(픽셀)다
 MIN_RADIUS = 10.0
 MAX_RADIUS = 60.0
+# 기본 반경 = 사람 크기 x 이 배율(하한·상한으로 자른다)
 RADIUS_SCALE = 1.2
+# 놓친 프레임 하나당 반경을 이 비율만큼 키운다(놓친 동안 더 멀리 움직였을 수 있으므로)
 LOST_RADIUS_GROWTH = 0.25
+# 반경을 키우는 데 반영하는 놓친 프레임 수의 상한
 LOST_GROWTH_LIMIT = 4
+# 키운 반경이 MAX_RADIUS의 이 배수를 넘지 못하게 하는 절대 상한
 MAX_RADIUS_FACTOR = 1.5
+# 속도·크기를 갱신할 때 이전 값을 얼마나 남길지(1에 가까울수록 천천히 변한다)
 VELOCITY_SMOOTH = 0.6
 SIZE_SMOOTH = 0.7
 # 놓친 동안은 속도만큼 다 가지 않았다고 보고 절반만 반영한다(속도 추정이 흔들려도 멀리 튀지 않게).
@@ -21,6 +27,8 @@ CONFIRM_HITS = 2
 
 @dataclass
 class _Track:
+    """추적 중인 사람 한 명의 상태. PointTracker 안에서만 쓴다."""
+
     id: int
     x: float  # 마지막으로 실제 본 위치
     y: float
@@ -50,11 +58,14 @@ class PointTracker:
         max_radius: float = MAX_RADIUS,
         confirm_hits: int = CONFIRM_HITS,
     ) -> None:
+        """max_missed: 이 프레임 수를 넘게 못 찾으면 트랙을 지운다. 나머지는 반경 하한·상한과 번호 확정에 필요한 관측 횟수."""
         self._max_missed = max_missed
         self._min_radius = min_radius
         self._max_radius = max_radius
         self._confirm_hits = confirm_hits
+        # 다음에 새 사람에게 줄 번호. 지운 번호는 다시 쓰지 않는다
         self._next_id = 1
+        # 번호 -> 트랙. 번호를 아직 받지 못한(관측 횟수 부족) 트랙도 여기에 있다
         self._tracks: dict[int, _Track] = {}
 
     def update(
@@ -67,8 +78,10 @@ class PointTracker:
         번 관측된 사람에게만 주고 나머지는 None이다. 한 번 번호를 받은 사람은 잠시 놓쳐도
         유지한다. 탐지가 하나도 없는 프레임도 넣어야 놓친 트랙이 시간에 맞춰 지워진다.
         """
+        # 입력 모양을 고정한다(탐지가 0개여도 (0, 2), (0,)이 되게)
         centers = np.asarray(centers, dtype=np.float64).reshape(-1, 2)
         sizes = np.asarray(sizes, dtype=np.float64).reshape(-1)
+        # 잘못된 입력이 거리 계산에서 NaN으로 번져 조용히 틀린 번호를 주지 않도록 먼저 막는다
         if len(centers) != len(sizes):
             raise ValueError("centers와 sizes의 개수가 다릅니다")
         if not (np.isfinite(centers).all() and np.isfinite(sizes).all()):
@@ -76,18 +89,22 @@ class PointTracker:
         if dt_frames <= 0:
             raise ValueError("dt_frames는 0보다 커야 합니다")
 
+        # 1단계: 기존 트랙과 이번 탐지를 1:1로 짝짓는다((트랙 위치, 탐지 위치) 인덱스 쌍 목록)
         tracks = list(self._tracks.values())
         matches = self._match(tracks, centers, dt_frames)
         matched_tracks = {t for t, _ in matches}
         matched_detections = {d for _, d in matches}
 
+        # 탐지마다 줄 번호를 모은다(짝이 없으면 아래에서 새 번호로 채운다)
         assigned: list[int | None] = [None] * len(centers)
+        # 2단계: 짝이 생긴 트랙은 새 위치·속도·크기로 갱신한다
         for track_index, detection_index in matches:
             track = tracks[track_index]
             self._observe(
                 track, centers[detection_index], sizes[detection_index], dt_frames
             )
             assigned[detection_index] = track.id
+        # 3단계: 짝이 없는 트랙은 놓친 프레임을 누적하고, 한도를 넘으면 지운다
         for track_index, track in enumerate(tracks):
             if track_index in matched_tracks:
                 continue
@@ -107,6 +124,7 @@ class PointTracker:
             self._next_id += 1
             self._tracks[track.id] = track
             assigned[detection_index] = track.id
+        # 새로 생겼거나 관측 횟수가 부족한 트랙은 번호를 밖으로 내보내지 않고 None으로 둔다(깜빡이는 오탐이 번호를 먹지 않게)
         return [
             (
                 track_id
@@ -120,15 +138,18 @@ class PointTracker:
     def _match(
         self, tracks: list[_Track], centers: np.ndarray, dt_frames: float
     ) -> list[tuple[int, int]]:
+        """트랙(예측 위치)과 탐지(중심점)를 가까운 쌍부터 1:1로 짝지어 (트랙 인덱스, 탐지 인덱스) 목록으로 돌려준다."""
         if not tracks or not len(centers):
             return []
         # 마지막으로 본 위치 + 속도 × (이번에 지난 프레임 + 놓친 동안 지난 프레임의 절반)
         elapsed = np.array([dt_frames + LOST_DRIFT * t.lost for t in tracks])
         predicted_x = np.array([t.x + t.vx * e for t, e in zip(tracks, elapsed)])
         predicted_y = np.array([t.y + t.vy * e for t, e in zip(tracks, elapsed)])
+        # (트랙 수 x 탐지 수) 거리 제곱 표. 제곱근을 생략해도 대소 비교는 같아 계산을 아낀다
         dx = predicted_x[:, None] - centers[None, :, 0]
         dy = predicted_y[:, None] - centers[None, :, 1]
         distance_squared = dx * dx + dy * dy
+        # 트랙마다 다른 허용 반경. 반경 안에 든 (트랙, 탐지) 후보 쌍만 뽑는다
         radius = np.array([self._radius(track) for track in tracks])
         track_index, detection_index = np.nonzero(
             distance_squared <= (radius * radius)[:, None]
@@ -144,6 +165,7 @@ class PointTracker:
         matches: list[tuple[int, int]] = []
         used_tracks: set[int] = set()
         used_detections: set[int] = set()
+        # 욕심쟁이(greedy) 방식: 가까운 쌍부터 확정하고, 이미 짝이 생긴 트랙·탐지가 낀 쌍은 건너뛴다
         for k in order:
             t, d = int(track_index[k]), int(detection_index[k])
             if t in used_tracks or d in used_detections:
@@ -154,9 +176,12 @@ class PointTracker:
         return matches
 
     def _radius(self, track: _Track) -> float:
+        """트랙 하나가 이번 프레임에서 같은 사람으로 받아들일 최대 거리. 크기에 비례하고 놓칠수록 넓어진다."""
+        # 사람이 클수록(가까이 찍힐수록) 한 프레임에 더 멀리 움직이므로 크기에 비례하되 하한·상한으로 자른다
         base = float(
             np.clip(RADIUS_SCALE * track.size, self._min_radius, self._max_radius)
         )
+        # 놓친 프레임 수만큼 반경을 키운다(증가분은 LOST_GROWTH_LIMIT까지만 센다)
         grown = base * (1.0 + LOST_RADIUS_GROWTH * min(track.lost, LOST_GROWTH_LIMIT))
         return min(self._max_radius * MAX_RADIUS_FACTOR, grown)
 
@@ -164,16 +189,20 @@ class PointTracker:
     def _observe(
         track: _Track, center: np.ndarray, size: float, dt_frames: float
     ) -> None:
+        """짝이 생긴 트랙을 새 관측(위치·크기)으로 갱신한다."""
         # 속도는 마지막으로 실제 본 위치에서 지금까지 지난 프레임 수로 나눈다.
         elapsed = track.lost + dt_frames
         vx = (float(center[0]) - track.x) / elapsed
         vy = (float(center[1]) - track.y) / elapsed
+        # 두 번째 관측부터는 이전 속도와 섞어 흔들림을 줄이고, 첫 속도 추정은 그대로 쓴다
         if track.hits > 1:
             track.vx = VELOCITY_SMOOTH * track.vx + (1 - VELOCITY_SMOOTH) * vx
             track.vy = VELOCITY_SMOOTH * track.vy + (1 - VELOCITY_SMOOTH) * vy
         else:
             track.vx, track.vy = vx, vy
+        # 마지막으로 실제 본 위치를 갱신하고, 크기는 이전 값과 섞어 부드럽게 바꾼다
         track.x, track.y = float(center[0]), float(center[1])
         track.size = SIZE_SMOOTH * track.size + (1 - SIZE_SMOOTH) * float(size)
+        # 관측 횟수는 누적(번호 확정 기준), 놓친 프레임 수는 다시 0
         track.hits += 1
         track.lost = 0.0

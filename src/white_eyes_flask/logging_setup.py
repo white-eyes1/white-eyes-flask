@@ -1,3 +1,10 @@
+"""로그 설정. 모든 로그 줄에 한국 시각과 "누구의 로그인지"(요청 ID 또는 캠 번호)를 붙인다.
+
+- HTTP 요청 처리 중이면 요청 ID(X-Request-Id)
+- 캠 작업 스레드면 cam-{cameraId}
+- 그 밖이면 "-"
+"""
+
 import contextvars
 import logging
 import logging.config
@@ -9,6 +16,7 @@ from flask import g, has_request_context
 
 from white_eyes_flask.camera.kst import KST
 
+# 로그 한 줄의 모양. request_id는 아래 RequestIdFilter가 record에 넣어 주는 값이다.
 LOG_FORMAT = (
     "%(asctime)s.%(msecs)03d %(levelname)-5s [%(threadName)s] "
     "%(request_id)s %(name)s - %(message)s"
@@ -36,6 +44,7 @@ class KstFormatter(logging.Formatter):
     """서버 시간대와 상관없이 로그 시각을 한국 표준시로 쓴다."""
 
     def converter(self, timestamp):
+        # logging이 시각을 시간 튜플로 바꿀 때 쓰는 훅. 기본(서버 로컬/UTC) 대신 KST로 변환한다.
         return datetime.fromtimestamp(timestamp, KST).timetuple()
 
 
@@ -43,16 +52,21 @@ class RequestIdFilter(logging.Filter):
     """요청 처리 중이면 요청 ID, 캠 작업 스레드면 cam-{cameraId}를 record에 넣는다."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """로그 줄을 거르지는 않고(항상 True), LOG_FORMAT이 쓸 request_id 값만 채워 넣는다."""
         record.request_id = self._request_id(record)
         return True
 
     @staticmethod
     def _request_id(record: logging.LogRecord) -> str:
+        """이 로그가 어느 요청·캠에서 나왔는지 알려 주는 표시를 정한다. 우선순위는 아래 순서다."""
         try:
+            # 1순위: Flask 요청 처리 중이면 요청 시작 때 g에 담아 둔 ID
             if has_request_context():
                 return g.get("request_id", NO_REQUEST_ID)
+            # 2순위: werkzeug 접속 로그는 요청 컨텍스트가 닫힌 뒤에 찍히므로 기억해 둔 마지막 ID를 쓴다
             if record.name == ACCESS_LOGGER:
                 return _last_request_id.get() or NO_REQUEST_ID
+            # 3순위: 스레드 이름이 cam-{번호}... 꼴이면 캠 작업 스레드이므로 cam-{번호}로 표시한다
             match = CAMERA_THREAD.fullmatch(threading.current_thread().name)
             return f"cam-{match[1]}" if match else NO_REQUEST_ID
         except Exception:
@@ -73,9 +87,12 @@ def quiet_library_loggers() -> None:
     """
     for name in LIBRARY_LOGGERS:
         library = logging.getLogger(name)
+        # 라이브러리가 스스로 낮춰 둔 레벨(INFO)을 WARNING으로 되돌린다
         library.setLevel(LIBRARY_LEVEL)
+        # 복사본([:])을 돌며 지운다. 순회하는 리스트를 직접 고치면 항목을 건너뛰기 때문이다
         for handler in library.handlers[:]:
             library.removeHandler(handler)
+        # 자체 핸들러 대신 루트의 콘솔 핸들러로 올려 보내 형식을 통일한다
         library.propagate = True
 
 
@@ -89,7 +106,9 @@ def configure_logging(level: str = "INFO") -> None:
 
     level(LOG_LEVEL)은 앱 패키지(white_eyes_flask)에만 적용하고, 그 밖의 라이브러리는 WARNING 이상만 낸다.
     """
+    # 소문자로 적은 설정(info 등)도 받아 준다
     level = level.upper()
+    # getLevelName은 모르는 이름이면 문자열을 돌려주므로, int가 아니면 잘못된 레벨이다
     if not isinstance(logging.getLevelName(level), int):
         level = "INFO"  # 알 수 없는 레벨 이름 때문에 서버가 못 뜨면 안 된다.
     logging.config.dictConfig(

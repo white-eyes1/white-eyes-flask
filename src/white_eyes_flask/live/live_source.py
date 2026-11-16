@@ -8,11 +8,14 @@ import cv2
 # 연결·읽기가 이 시간 안에 안 되면 실패로 본다. 정지 요청(최대 10초 대기)이 이보다 오래 막히지 않게 한다.
 OPEN_TIMEOUT_MS = 5000
 READ_TIMEOUT_MS = 5000
+# RTSP로 보는 주소의 접두어(rtsps는 TLS 암호화 버전)
 RTSP_SCHEMES = ("rtsp://", "rtsps://")
+# 주소의 "//계정:비밀번호@" 부분. 계정에는 '/'나 '@'가 없다고 보고 첫 '@'까지만 잡는다
 _CREDENTIALS = re.compile(r"//[^/@]*@")
 
 
 def is_rtsp_uri(uri: str) -> bool:
+    """RTSP 주소인지. 대소문자는 구분하지 않는다. (파일 경로 등 다른 입력과 구분하는 데 쓴다)"""
     return uri.lower().startswith(RTSP_SCHEMES)
 
 

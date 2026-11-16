@@ -15,6 +15,8 @@ from white_eyes_flask.stream.stream_service import StreamService
 
 
 class LiveWorkFactory(Protocol):
+    """캠 번호로 라이브 재생기와 녹화기 한 쌍을 만들어 주는 팩토리의 약속(시험에서 가짜로 바꿀 수 있게 분리)."""
+
     def create(
         self, camera_id: int
     ) -> tuple[LivePlayer, GapSplittingRecorder | None]: ...
@@ -38,6 +40,7 @@ class LiveFactory:
         capture_factory: Callable[[str], Any] = open_capture,
         reconnect_fail_sec: float | None = None,
     ) -> None:
+        """공유 부품과 설정을 받아 둔다. capture_factory는 RTSP를 여는 함수로, 시험에서 가짜로 바꿀 수 있다."""
         self._reconnect_fail_sec = reconnect_fail_sec
         self._detector_provider = detector_provider
         self._sink = sink
@@ -51,6 +54,7 @@ class LiveFactory:
         self._capture_factory = capture_factory
 
     def create(self, camera_id: int) -> tuple[LivePlayer, GapSplittingRecorder | None]:
+        """캠 하나를 위한 (재생기, 녹화기)를 새로 만든다. 재생기가 프레임을 읽어 분석하고 같은 프레임을 녹화기에도 넘긴다."""
         # 스트림이 끊겼다 복구되면 녹화 파일을 새로 시작한다(LiveRecorder는 파일 하나의 ffmpeg 수명이다)
         recorder = GapSplittingRecorder(
             camera_id,

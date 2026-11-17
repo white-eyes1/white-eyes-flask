@@ -13,7 +13,7 @@ from white_eyes_flask.analysis.detector_provider import (
 
 @pytest.fixture
 def loads(monkeypatch):
-    """두 탐지기의 from_weights를 가짜로 바꾸고 호출 기록을 돌려준다."""
+    """탐지기의 from_weights를 가짜로 바꾸고 호출 기록을 돌려준다."""
     record = {"calls": [], "fail": None}
 
     def fake(kind):
@@ -27,9 +27,6 @@ def loads(monkeypatch):
 
     monkeypatch.setattr(
         detector_provider.VisDroneDetector, "from_weights", fake("visdrone")
-    )
-    monkeypatch.setattr(
-        detector_provider.YoloCrowdDetector, "from_weights", fake("yolo-crowd")
     )
     return record
 
@@ -58,11 +55,9 @@ def test_visdrone_is_the_default_and_gets_the_dedupe_setting(tmp_path, loads):
     assert loads["calls"] == [("visdrone", str(weights), 960, 0.3, 0.4)]
 
 
-def test_yolo_crowd_can_be_selected(tmp_path, loads):
-    weights = tmp_path / "w.pt"
-    weights.write_bytes(b"x")
-    LazyDetectorProvider(str(weights), 640, 0.3, kind="yolo-crowd")()
-    assert loads["calls"] == [("yolo-crowd", str(weights), 640, 0.3)]
+def test_removed_yolo_crowd_is_rejected_at_construction():
+    with pytest.raises(ValueError):
+        LazyDetectorProvider("w.pt", 640, 0.3, kind="yolo-crowd")
 
 
 def test_detector_is_loaded_once_and_shared(tmp_path, loads):

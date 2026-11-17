@@ -6,3 +6,13 @@ tests
 docs
 **/__pycache__
 .pytest_cache
+# .gitignore와 맞춤: 로컬에서 빌드해도 가중치·영상·녹화 산출물이 이미지에 들어가지 않게 한다
+*.pt
+*.pth
+*.onnx
+*.mp4
+*.json.gz
+# 작업 도구 파일, 호스트 cron 스크립트(스토리지 서버에서 실행하므로 이미지에 불필요)
+.claude
+CLAUDE.local.md
+ops

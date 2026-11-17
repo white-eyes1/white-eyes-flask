@@ -22,3 +22,40 @@ jobs:
       - run: black --check .
       - run: isort --check-only .
       - run: pytest
+
+  # dev에 머지된 결과만 이미지로 올린다(GHCR). 배포는 각 VM에서 이 이미지를 받아 하는 스크립트로 한다(overview.md '배포 방식')
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/white-eyes-flask
+          # dev: 움직이는 태그, dev-<짧은 SHA>: 배포 때 버전 지정용
+          tags: |
+            type=raw,value=dev
+            type=sha,prefix=dev-,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

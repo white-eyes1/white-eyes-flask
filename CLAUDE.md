@@ -14,7 +14,7 @@
 
 ## 구조
 - 분석 서버(포트 5000, 경로 `/analyzer/v1/**`). 관리자 앱(시작·정지 지시)과 웹 서버(실시간 화면)만 접근한다.
-- `src/white_eyes_flask/`: 앱 코드. `tests/`: 테스트. `vendor/yolo_crowd/`: 외부 코드, 수정하지 않는다.
+- `src/white_eyes_flask/`: 앱 코드. `tests/`: 테스트.
 - `ops/`: 녹화 파일 정리·DB 백업 cron 스크립트(FNC-S-014·015). 분석 서버 앱과 따로 실행한다.
 - spring과는 HTTP 계약(api/analyzer.md)으로만 연결한다. 서로의 코드를 가져다 쓰지 않는다.
 

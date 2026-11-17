@@ -6,14 +6,13 @@ from pathlib import Path
 
 from white_eyes_flask.analysis.aerial_detector import VisDroneDetector
 from white_eyes_flask.analysis.boxes import DEFAULT_DEDUPE_OVERLAP
-from white_eyes_flask.analysis.detector import Detector, YoloCrowdDetector
+from white_eyes_flask.analysis.detector import Detector
 from white_eyes_flask.logging_setup import quiet_library_loggers
 
 logger = logging.getLogger(__name__)
 
 DETECTOR_VISDRONE = "visdrone"
-DETECTOR_YOLO_CROWD = "yolo-crowd"
-DETECTOR_KINDS = (DETECTOR_VISDRONE, DETECTOR_YOLO_CROWD)
+DETECTOR_KINDS = (DETECTOR_VISDRONE,)
 
 
 class DetectorUnavailableError(Exception):
@@ -63,10 +62,6 @@ class LazyDetectorProvider:
             return self._detector
 
     def _load(self, weights: str) -> Detector:
-        if self._kind == DETECTOR_YOLO_CROWD:
-            return YoloCrowdDetector.from_weights(
-                weights, self._imgsz, self._conf_thres
-            )
         return VisDroneDetector.from_weights(
             weights, self._imgsz, self._conf_thres, self._dedupe_overlap
         )

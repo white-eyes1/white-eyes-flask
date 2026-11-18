@@ -17,6 +17,7 @@ White Eyes의 **영상 분석 서버**(Flask). 드론·CCTV 영상에서 사람�
 - [녹화 파일 정리](#녹화-파일-정리-fnc-s-014)
 - [의존성](#의존성)
 - [가중치](#가중치)
+- [라이선스·의존성 고지](#라이선스의존성-고지)
 - [알려진 한계](#알려진-한계)
 
 ## 전체 구성에서의 위치
@@ -151,7 +152,7 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 
 ### VisDrone YOLOv8m
 
-드론처럼 위에서 내려다본 사람을 찾도록 학습된 모델이다. 출처는 https://huggingface.co/mshamrai/yolov8m-visdrone 의 `best.pt`이고, 시험에 쓴 파일은 아래 해시와 같다. 라이선스는 **PM이 정할 때까지 미확인**이다(Ultralytics AGPL-3.0, 학습 데이터 VisDrone은 연구 목적 공개). 그래서 이 저장소에는 올리지 않았다. 가중치 파일은 pickle 형식이므로 믿을 수 있는 곳에서 받은 파일만 쓴다.
+드론처럼 위에서 내려다본 사람을 찾도록 학습된 모델이다. 출처는 https://huggingface.co/mshamrai/yolov8m-visdrone 의 `best.pt`이고, 시험에 쓴 파일은 아래 해시와 같다. 모델 카드의 라이선스 표기는 `openrail`이고 상세 조항은 확인하지 못했다. 학습 데이터 VisDrone의 사용 조건(연구 목적 공개)도 확인하지 못했다([라이선스·의존성 고지](#라이선스의존성-고지)). 그래서 이 저장소와 이미지에는 넣지 않았다. 가중치 파일은 pickle 형식이므로 믿을 수 있는 곳에서 받은 파일만 쓴다.
 
 ```bash
 curl -L -o weights/visdrone-yolov8m.pt https://huggingface.co/mshamrai/yolov8m-visdrone/resolve/main/best.pt
@@ -160,6 +161,23 @@ sha256sum weights/visdrone-yolov8m.pt   # Windows PowerShell: (Get-FileHash weig
 ```
 
 `.env`에는 `YOLO_WEIGHTS=./weights/visdrone-yolov8m.pt`처럼 적는다. 입력 크기는 `DETECT_IMGSZ`(기본 960), 같은 사람을 둘로 센 박스를 합치는 기준은 `DETECT_DEDUPE_OVERLAP`(기본 0=합치지 않음, 켜려면 0.25 정도)이다.
+
+## 라이선스·의존성 고지
+
+이 저장소는 취업 포트폴리오를 겸한 비상업 팀 프로젝트다. 프로젝트 자체의 라이선스 파일(`LICENSE`)은 아직 두지 않았다. 정하려면 팀 합의가 필요해서 보류했다. 아래는 쓰는 구성요소의 라이선스를 조사해 적은 것이며 법률 검토가 아니다. 이 표만으로 각 라이선스의 의무를 다했다고 단정하지 않는다.
+
+| 구성요소 | 라이선스 | 비고 |
+|---|---|---|
+| ultralytics 8.4.183 | AGPL-3.0(상용 Enterprise 라이선스는 별도) | Ultralytics는 이를 쓰는 프로젝트 전체의 소스 공개를 안내한다. 이 저장소의 소스는 공개이고, GHCR 이미지(공개)는 이 저장소에서 빌드한다. 이미지에는 출처 저장소 라벨(`org.opencontainers.image.source`)이 붙는다. |
+| VisDrone YOLOv8m 가중치 | 모델 카드 `openrail`(상세 조항 미확인) | 저장소와 이미지에 넣지 않고 `YOLO_WEIGHTS` 경로로 따로 받아 쓴다. |
+| VisDrone 데이터셋(학습 데이터) | 사용 조건 미확인(연구 목적 공개) | 확인한 공식 페이지에는 이용약관이 없었다. |
+| torch·torchvision | BSD 계열 | |
+| flask·numpy·pandas·scipy·seaborn | BSD 계열 | |
+| opencv(ultralytics 의존) | MIT(패키징)·Apache-2(OpenCV) | 휠에 LGPL 라이선스의 FFmpeg·Qt가 함께 들어 있다. |
+| ffmpeg(이미지에 apt로 설치) | Debian 패키지는 GPL로 빌드됨 | 대응 소스는 Debian 패키지 소스 저장소에서 받을 수 있다. |
+
+- 의존성 트리 전체(전이 의존성)와 apt로 설치되는 다른 패키지는 아직 스캔하지 않았다.
+- 새 의존성을 더하거나 모델을 바꾸면 이 표를 같이 고친다.
 
 ## 알려진 한계
 
